@@ -77,10 +77,10 @@ router.post('/api/logout', requireAuth, (req, res) => {
 
 router.get('/api/accounts', requireAuth, async (req, res) => {
   try {
-    const prefix = String(req.query.prefix || '').trim();
-    const limit = Math.min(Math.max(Number(req.query.limit || 500), 1), 500);
+    const prefix = String(req.query.prefix || '').trim().toLowerCase();
+    const limit = Math.min(Math.max(Number(req.query.limit || config.accountScanLimit), 1), config.accountScanLimit);
     const accounts = await listAccounts({ prefix, limit });
-    res.json({ accounts });
+    res.json({ accounts, count: accounts.length });
   } catch (err) {
     handleError(res, err, 'LIST_ACCOUNTS_FAILED');
   }
@@ -353,10 +353,26 @@ async function listAccountPage({ position = 0, limit = 500 }) {
 }
 
 async function listAccounts({ prefix, limit }) {
-  const { accounts } = await listAccountPage({ limit });
-  return accounts
-    .filter((account) => !prefix || account.emailAddress?.startsWith(prefix))
-    .slice(0, limit);
+  const results = [];
+  const pageSize = 500;
+  let position = 0;
+
+  while (position < config.accountScanLimit && results.length < limit) {
+    const pageLimit = Math.min(pageSize, config.accountScanLimit - position);
+    const { accounts, ids } = await listAccountPage({ position, limit: pageLimit });
+    const filtered = accounts.filter((account) => {
+      const emailAddress = String(account.emailAddress || '').toLowerCase();
+      return !prefix || emailAddress.startsWith(prefix);
+    });
+    results.push(...filtered.slice(0, limit - results.length));
+
+    if (ids.length < pageLimit) {
+      break;
+    }
+    position += ids.length;
+  }
+
+  return results.sort((a, b) => String(a.emailAddress).localeCompare(String(b.emailAddress)));
 }
 
 async function findExistingAccounts(addresses) {

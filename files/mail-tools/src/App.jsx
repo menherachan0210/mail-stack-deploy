@@ -12,9 +12,9 @@ import {
   InputNumber,
   Layout,
   Menu,
-  Modal,
   Row,
   Space,
+  Spin,
   Table,
   Tag,
   Tooltip,
@@ -33,8 +33,12 @@ export function MailToolsApp({ icons }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [mailLoading, setMailLoading] = useState(false);
   const [messageLoading, setMessageLoading] = useState(false);
-  const [activeSection, setActiveSection] = useState('bulk');
-  const [resultText, setResultText] = useState('等待操作。');
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [activeSection, setActiveSection] = useState('accounts');
+  const [bulkResultText, setBulkResultText] = useState('等待操作。');
+  const [inboxResultText, setInboxResultText] = useState('等待操作。');
+  const [accounts, setAccounts] = useState([]);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [createRows, setCreateRows] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -58,6 +62,11 @@ export function MailToolsApp({ icons }) {
 
   const loggedIn = Boolean(session.authenticated);
 
+  useEffect(() => {
+    if (!loggedIn || activeSection !== 'accounts' || accountsLoaded || accountsLoading) return;
+    void loadAccounts();
+  }, [loggedIn, activeSection, accountsLoaded, accountsLoading]);
+
   async function handleLogin(values) {
     setLoginLoading(true);
     try {
@@ -78,15 +87,39 @@ export function MailToolsApp({ icons }) {
       // Session may already be gone.
     }
     setSession({ authenticated: false, user: null, domain });
+    setAccounts([]);
+    setAccountsLoaded(false);
     setCreateRows([]);
     setMessages([]);
     setSelectedMessage(null);
-    setActiveSection('bulk');
-    setResultText('等待操作。');
+    setActiveSection('accounts');
+    setBulkResultText('等待操作。');
+    setInboxResultText('等待操作。');
   }
 
   function openSection(key) {
     setActiveSection(key);
+  }
+
+  async function loadAccounts() {
+    setAccountsLoading(true);
+    try {
+      const data = await api('/api/accounts?limit=20000');
+      setAccounts((data.accounts || []).map((account) => ({ ...account, key: account.id || account.emailAddress })));
+      setAccountsLoaded(true);
+    } catch (err) {
+      message.error(err.message);
+      setAccountsLoaded(true);
+    } finally {
+      setAccountsLoading(false);
+    }
+  }
+
+  async function openMailbox(address, password = DEFAULT_MAIL_PASSWORD) {
+    const limit = mailForm.getFieldValue('limit') || 50;
+    openSection('inbox');
+    mailForm.setFieldsValue({ address, password, limit });
+    await loadInbox({ address, password, limit });
   }
 
   async function previewAccounts() {
@@ -120,8 +153,7 @@ export function MailToolsApp({ icons }) {
         setCreateRows(data.accounts.map(toCreateRow));
         setMessages([]);
         setSelectedMessage(null);
-        openSection('results');
-        setResultText(
+        setBulkResultText(
           `预览 ${data.summary.total} 个账号：可创建 ${data.summary.pending} 个，已存在 ${data.summary.existing} 个。`,
         );
         return;
@@ -152,13 +184,13 @@ export function MailToolsApp({ icons }) {
       setCreateRows(rows);
       setMessages([]);
       setSelectedMessage(null);
-      openSection('results');
-      setResultText(
+      setAccountsLoaded(false);
+      setBulkResultText(
         `创建完成：成功 ${created.length} 个，跳过 ${skipped.length} 个，失败 ${notCreated.length} 个。`,
       );
     } catch (err) {
       message.error(err.message);
-      setResultText(err.message);
+      setBulkResultText(err.message);
     } finally {
       setBulkLoading(false);
     }
@@ -177,14 +209,14 @@ export function MailToolsApp({ icons }) {
       setMailboxAuth({ address, password: values.password });
       setMessages(data.messages.map((item) => ({ ...item, key: item.uid })));
       setCreateRows([]);
-      openSection('results');
-      setResultText(`${data.address} 收件箱：${data.messages.length} 封邮件。`);
+      openSection('inbox');
+      setInboxResultText(`${data.address} 收件箱：${data.messages.length} 封邮件。`);
       if (!data.messages.length) {
         message.info('收件箱暂无邮件');
       }
     } catch (err) {
       message.error(err.message);
-      setResultText(err.message);
+      setInboxResultText(err.message);
     } finally {
       setMailLoading(false);
     }
@@ -199,64 +231,93 @@ export function MailToolsApp({ icons }) {
         `/api/mailboxes/${encodeURIComponent(mailboxAuth.address)}/messages/${uid}?${params}`,
       );
       setSelectedMessage(data.message);
-      openSection('message');
-      setResultText(`已打开邮件 #${uid}。`);
+      openSection('inbox');
+      setInboxResultText(`已打开邮件 #${uid}。`);
     } catch (err) {
       message.error(err.message);
-      setResultText(err.message);
+      setInboxResultText(err.message);
     } finally {
       setMessageLoading(false);
     }
   }
 
-  const resultColumns = useMemo(() => {
-    if (messages.length) {
-      return [
-        {
-          title: '状态',
-          dataIndex: 'seen',
-          width: 88,
-          render: (seen) => <Tag color={seen ? 'default' : 'green'}>{seen ? '已读' : '未读'}</Tag>,
-        },
-        { title: '发件人', dataIndex: 'from', ellipsis: true },
-        {
-          title: '主题',
-          dataIndex: 'subject',
-          ellipsis: true,
-          render: (value) => value || '(无主题)',
-        },
-        {
-          title: '时间',
-          dataIndex: 'date',
-          width: 180,
-          render: formatDate,
-        },
-        {
-          title: '大小',
-          dataIndex: 'size',
-          width: 110,
-          render: formatSize,
-        },
-      ];
-    }
-    return [
-      { title: '邮箱', dataIndex: 'email', ellipsis: true },
-      {
-        title: '状态',
-        dataIndex: 'status',
-        width: 110,
-        render: (status) => <Tag color={statusColor(status)}>{status}</Tag>,
-      },
-      { title: '详情', dataIndex: 'detail', ellipsis: true },
-    ];
-  }, [messages.length]);
+  const createColumns = useMemo(() => [
+    { title: '邮箱', dataIndex: 'email', ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (status) => <Tag color={statusColor(status)}>{status}</Tag>,
+    },
+    { title: '详情', dataIndex: 'detail', ellipsis: true },
+  ], []);
 
-  const resultData = messages.length ? messages : createRows;
+  const messageColumns = useMemo(() => [
+    {
+      title: '状态',
+      dataIndex: 'seen',
+      width: 88,
+      render: (seen) => <Tag color={seen ? 'default' : 'green'}>{seen ? '已读' : '未读'}</Tag>,
+    },
+    { title: '发件人', dataIndex: 'from', ellipsis: true },
+    {
+      title: '主题',
+      dataIndex: 'subject',
+      ellipsis: true,
+      render: (value) => value || '(无主题)',
+    },
+    {
+      title: '时间',
+      dataIndex: 'date',
+      width: 180,
+      render: formatDate,
+    },
+    {
+      title: '大小',
+      dataIndex: 'size',
+      width: 110,
+      render: formatSize,
+    },
+  ], []);
+
   const sidebarItems = [
+    { key: 'accounts', icon: <Icon.AppstoreOutlined />, label: '邮箱账号' },
     { key: 'bulk', icon: <Icon.UserAddOutlined />, label: '批量创建' },
     { key: 'inbox', icon: <Icon.InboxOutlined />, label: '查看收件箱' },
-    { key: 'results', icon: <Icon.SearchOutlined />, label: '结果' },
-    { key: 'message', icon: <Icon.MailOutlined />, label: '邮件内容' },
+  ];
+
+  const accountColumns = [
+    { title: '邮箱地址', dataIndex: 'emailAddress', ellipsis: true },
+    { title: '名称', dataIndex: 'name', width: 180, ellipsis: true },
+    {
+      title: '已用空间',
+      dataIndex: 'usedDiskQuota',
+      width: 120,
+      render: formatSize,
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      width: 180,
+      render: formatDate,
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 130,
+      render: (_, record) => (
+        <Button
+          type="link"
+          icon={<Icon.InboxOutlined />}
+          onClick={(event) => {
+            event.stopPropagation();
+            openMailbox(record.emailAddress);
+          }}
+        >
+          查看收件箱
+        </Button>
+      ),
+    },
   ];
 
   if (sessionLoading) {
@@ -313,7 +374,12 @@ export function MailToolsApp({ icons }) {
           mode="inline"
           selectedKeys={[activeSection]}
           items={sidebarItems}
-          onClick={({ key }) => openSection(key)}
+          onClick={({ key }) => {
+            openSection(key);
+            if (key === 'accounts' && !accountsLoaded) {
+              loadAccounts();
+            }
+          }}
         />
         <div className="sider-footer">
           <Typography.Text type="secondary">已登录</Typography.Text>
@@ -337,6 +403,37 @@ export function MailToolsApp({ icons }) {
         </Layout.Header>
 
         <Layout.Content className="app-content">
+          {activeSection === 'accounts' ? (
+            <Card
+              className="page-card"
+              title={
+                <Space>
+                  <Icon.AppstoreOutlined />
+                  <span>邮箱账号</span>
+                </Space>
+              }
+              extra={
+                <Button icon={<Icon.ReloadOutlined />} loading={accountsLoading} onClick={loadAccounts}>
+                  刷新
+                </Button>
+              }
+            >
+              <Table
+                size="middle"
+                columns={accountColumns}
+                dataSource={accounts}
+                loading={accountsLoading}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无邮箱账号" /> }}
+                pagination={{ pageSize: 20, showSizeChanger: true }}
+                scroll={{ x: 860 }}
+                onRow={(record) => ({
+                  onClick: () => openMailbox(record.emailAddress),
+                  className: 'clickable-row',
+                })}
+              />
+            </Card>
+          ) : null}
+
           {activeSection === 'bulk' ? (
             <Card
               className="page-card"
@@ -425,6 +522,25 @@ export function MailToolsApp({ icons }) {
                   </Button>
                 </Space>
               </Form>
+              <div className="embedded-section">
+                <div className="embedded-panel">
+                  <div className="embedded-panel-header">
+                    <Typography.Title level={5}>创建结果</Typography.Title>
+                    <Typography.Text type="secondary">{bulkResultText}</Typography.Text>
+                  </div>
+                  {createRows.length ? (
+                    <Table
+                      size="small"
+                      columns={createColumns}
+                      dataSource={createRows}
+                      pagination={{ pageSize: 10, showSizeChanger: true }}
+                      scroll={{ x: 760 }}
+                    />
+                  ) : (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无创建结果" />
+                  )}
+                </div>
+              </div>
             </Card>
           ) : null}
 
@@ -489,69 +605,68 @@ export function MailToolsApp({ icons }) {
                   </Col>
                 </Row>
               </Form>
-            </Card>
-          ) : null}
-
-          {activeSection === 'results' ? (
-            <Card
-              className="page-card"
-              title="结果"
-              extra={<Typography.Text type="secondary">{resultText}</Typography.Text>}
-            >
-              {resultData.length ? (
-                <Table
-                  size="middle"
-                  columns={resultColumns}
-                  dataSource={resultData}
-                  pagination={{ pageSize: 10, showSizeChanger: true }}
-                  scroll={{ x: 760 }}
-                  onRow={(record) => ({
-                    onClick: () => {
-                      if (messages.length && record.uid) {
-                        loadMessage(record.uid);
-                      }
-                    },
-                    className: messages.length ? 'clickable-row' : '',
-                  })}
-                />
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无结果" />
-              )}
-            </Card>
-          ) : null}
-
-          {activeSection === 'message' ? (
-            <Card className="page-card" title="邮件内容" loading={messageLoading}>
-              {selectedMessage ? (
-                <Space direction="vertical" size={16} className="full-width">
-                  <Descriptions
-                    size="small"
-                    column={{ xs: 1, md: 2 }}
-                    items={[
-                      { key: 'from', label: '发件人', children: selectedMessage.from || '-' },
-                      { key: 'to', label: '收件人', children: selectedMessage.to || '-' },
-                      { key: 'subject', label: '主题', children: selectedMessage.subject || '(无主题)' },
-                      { key: 'date', label: '时间', children: formatDate(selectedMessage.date) || '-' },
-                    ]}
-                  />
-                  {selectedMessage.attachments?.length ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message={`附件：${selectedMessage.attachments
-                        .map((item) => `${item.filename} (${formatSize(item.size)})`)
-                        .join('，')}`}
+              <div className="embedded-section">
+                <div className="embedded-panel">
+                  <div className="embedded-panel-header">
+                    <Typography.Title level={5}>收件箱结果</Typography.Title>
+                    <Typography.Text type="secondary">{inboxResultText}</Typography.Text>
+                  </div>
+                  {messages.length ? (
+                    <Table
+                      size="small"
+                      columns={messageColumns}
+                      dataSource={messages}
+                      pagination={{ pageSize: 10, showSizeChanger: true }}
+                      scroll={{ x: 760 }}
+                      onRow={(record) => ({
+                        onClick: () => loadMessage(record.uid),
+                        className: 'clickable-row',
+                      })}
                     />
-                  ) : null}
-                  {selectedMessage.html ? (
-                    <iframe className="message-frame" sandbox="" srcDoc={selectedMessage.html} title="邮件正文" />
                   ) : (
-                    <pre className="message-text">{selectedMessage.text || '(无正文)'}</pre>
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无收件箱结果" />
                   )}
-                </Space>
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一封邮件查看正文" />
-              )}
+                </div>
+              </div>
+              <div className="embedded-section">
+                <div className="embedded-panel">
+                  <div className="embedded-panel-header">
+                    <Typography.Title level={5}>邮件内容</Typography.Title>
+                  </div>
+                  <Spin spinning={messageLoading}>
+                    {selectedMessage ? (
+                      <Space direction="vertical" size={16} className="full-width">
+                        <Descriptions
+                          size="small"
+                          column={{ xs: 1, md: 2 }}
+                          items={[
+                            { key: 'from', label: '发件人', children: selectedMessage.from || '-' },
+                            { key: 'to', label: '收件人', children: selectedMessage.to || '-' },
+                            { key: 'subject', label: '主题', children: selectedMessage.subject || '(无主题)' },
+                            { key: 'date', label: '时间', children: formatDate(selectedMessage.date) || '-' },
+                          ]}
+                        />
+                        {selectedMessage.attachments?.length ? (
+                          <Alert
+                            type="info"
+                            showIcon
+                            message={`附件：${selectedMessage.attachments
+                              .map((item) => `${item.filename} (${formatSize(item.size)})`)
+                              .join('，')}`}
+                          />
+                        ) : null}
+                        {selectedMessage.html ? (
+                          <iframe className="message-frame" sandbox="" srcDoc={selectedMessage.html} title="邮件正文" />
+                        ) : (
+                          <pre className="message-text">{selectedMessage.text || '(无正文)'}</pre>
+                        )}
+                      </Space>
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一封邮件查看正文" />
+                    )}
+                  </Spin>
+                </div>
+              </div>
             </Card>
           ) : null}
         </Layout.Content>

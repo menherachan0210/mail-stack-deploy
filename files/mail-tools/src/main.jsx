@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App as AntApp, ConfigProvider, theme } from 'antd';
 import 'antd/dist/reset.css';
 import {
+  AppstoreOutlined,
   InboxOutlined,
   LogoutOutlined,
   MailOutlined,
@@ -15,6 +16,7 @@ import { MailToolsApp } from './App.jsx';
 import './styles.css';
 
 const iconSet = {
+  AppstoreOutlined,
   InboxOutlined,
   LogoutOutlined,
   MailOutlined,

@@ -98,6 +98,27 @@ body {
   min-height: 480px;
 }
 
+.embedded-section {
+  margin-top: 22px;
+}
+
+.embedded-panel {
+  padding-top: 18px;
+  border-top: 1px solid #252d38;
+}
+
+.embedded-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.embedded-panel-header .ant-typography {
+  margin: 0 !important;
+}
+
 .full-width {
   width: 100%;
 }
@@ -149,5 +170,10 @@ body {
   .app-content {
     width: min(100vw - 20px, 1040px);
     padding-top: 12px;
+  }
+
+  .embedded-panel-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
