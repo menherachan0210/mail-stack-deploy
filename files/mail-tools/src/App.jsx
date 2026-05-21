@@ -38,7 +38,11 @@ export function MailToolsApp({ icons }) {
   const [bulkResultText, setBulkResultText] = useState('等待操作。');
   const [inboxResultText, setInboxResultText] = useState('等待操作。');
   const [accounts, setAccounts] = useState([]);
-  const [accountsLoaded, setAccountsLoaded] = useState(false);
+  const [accountsPage, setAccountsPage] = useState(1);
+  const [accountsPageSize, setAccountsPageSize] = useState(20);
+  const [accountsTotal, setAccountsTotal] = useState(0);
+  const [accountsSearch, setAccountsSearch] = useState('');
+  const [accountsSearchDraft, setAccountsSearchDraft] = useState('');
   const [createRows, setCreateRows] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedMessage, setSelectedMessage] = useState(null);
@@ -63,9 +67,9 @@ export function MailToolsApp({ icons }) {
   const loggedIn = Boolean(session.authenticated);
 
   useEffect(() => {
-    if (!loggedIn || activeSection !== 'accounts' || accountsLoaded || accountsLoading) return;
-    void loadAccounts();
-  }, [loggedIn, activeSection, accountsLoaded, accountsLoading]);
+    if (!loggedIn || activeSection !== 'accounts') return;
+    void loadAccounts({ page: accountsPage, pageSize: accountsPageSize, search: accountsSearch });
+  }, [loggedIn, activeSection, accountsPage, accountsPageSize, accountsSearch]);
 
   async function handleLogin(values) {
     setLoginLoading(true);
@@ -88,7 +92,10 @@ export function MailToolsApp({ icons }) {
     }
     setSession({ authenticated: false, user: null, domain });
     setAccounts([]);
-    setAccountsLoaded(false);
+    setAccountsPage(1);
+    setAccountsTotal(0);
+    setAccountsSearch('');
+    setAccountsSearchDraft('');
     setCreateRows([]);
     setMessages([]);
     setSelectedMessage(null);
@@ -101,15 +108,24 @@ export function MailToolsApp({ icons }) {
     setActiveSection(key);
   }
 
-  async function loadAccounts() {
+  async function loadAccounts(options = {}) {
+    const page = options.page || accountsPage;
+    const pageSize = options.pageSize || accountsPageSize;
+    const search = options.search ?? accountsSearch;
     setAccountsLoading(true);
     try {
-      const data = await api('/api/accounts?limit=20000');
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (search.trim()) {
+        params.set('search', search.trim());
+      }
+      const data = await api(`/api/accounts?${params}`);
       setAccounts((data.accounts || []).map((account) => ({ ...account, key: account.id || account.emailAddress })));
-      setAccountsLoaded(true);
+      setAccountsTotal(data.total || data.count || 0);
     } catch (err) {
       message.error(err.message);
-      setAccountsLoaded(true);
     } finally {
       setAccountsLoading(false);
     }
@@ -184,7 +200,9 @@ export function MailToolsApp({ icons }) {
       setCreateRows(rows);
       setMessages([]);
       setSelectedMessage(null);
-      setAccountsLoaded(false);
+      if (activeSection === 'accounts') {
+        void loadAccounts({ page: accountsPage, pageSize: accountsPageSize, search: accountsSearch });
+      }
       setBulkResultText(
         `创建完成：成功 ${created.length} 个，跳过 ${skipped.length} 个，失败 ${notCreated.length} 个。`,
       );
@@ -376,9 +394,6 @@ export function MailToolsApp({ icons }) {
           items={sidebarItems}
           onClick={({ key }) => {
             openSection(key);
-            if (key === 'accounts' && !accountsLoaded) {
-              loadAccounts();
-            }
           }}
         />
         <div className="sider-footer">
@@ -413,9 +428,33 @@ export function MailToolsApp({ icons }) {
                 </Space>
               }
               extra={
-                <Button icon={<Icon.ReloadOutlined />} loading={accountsLoading} onClick={loadAccounts}>
-                  刷新
-                </Button>
+                <Space wrap>
+                  <Input.Search
+                    allowClear
+                    placeholder="搜索邮箱或名称"
+                    value={accountsSearchDraft}
+                    onChange={(event) => {
+                      const nextSearch = event.target.value;
+                      setAccountsSearchDraft(nextSearch);
+                      if (!nextSearch) {
+                        setAccountsSearch('');
+                        setAccountsPage(1);
+                      }
+                    }}
+                    onSearch={(value) => {
+                      setAccountsSearch(value.trim());
+                      setAccountsPage(1);
+                    }}
+                    className="account-search"
+                  />
+                  <Button
+                    icon={<Icon.ReloadOutlined />}
+                    loading={accountsLoading}
+                    onClick={() => loadAccounts({ page: accountsPage, pageSize: accountsPageSize, search: accountsSearch })}
+                  >
+                    刷新
+                  </Button>
+                </Space>
               }
             >
               <Table
@@ -424,8 +463,18 @@ export function MailToolsApp({ icons }) {
                 dataSource={accounts}
                 loading={accountsLoading}
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无邮箱账号" /> }}
-                pagination={{ pageSize: 20, showSizeChanger: true }}
+                pagination={{
+                  current: accountsPage,
+                  pageSize: accountsPageSize,
+                  total: accountsTotal,
+                  showSizeChanger: true,
+                  showTotal: (total) => `共 ${total} 个邮箱`,
+                }}
                 scroll={{ x: 860 }}
+                onChange={(pagination) => {
+                  setAccountsPage(pagination.current || 1);
+                  setAccountsPageSize(pagination.pageSize || 20);
+                }}
                 onRow={(record) => ({
                   onClick: () => openMailbox(record.emailAddress),
                   className: 'clickable-row',

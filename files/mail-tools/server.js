@@ -77,10 +77,19 @@ router.post('/api/logout', requireAuth, (req, res) => {
 
 router.get('/api/accounts', requireAuth, async (req, res) => {
   try {
+    const page = readBoundedInteger(req.query.page, 1, config.accountScanLimit);
+    const pageSize = readBoundedInteger(req.query.pageSize || req.query.limit, 20, 100);
+    const search = String(req.query.search || '').trim().toLowerCase();
     const prefix = String(req.query.prefix || '').trim().toLowerCase();
-    const limit = Math.min(Math.max(Number(req.query.limit || config.accountScanLimit), 1), config.accountScanLimit);
-    const accounts = await listAccounts({ prefix, limit });
-    res.json({ accounts, count: accounts.length });
+    const result = await listAccounts({ prefix, search, page, pageSize });
+    res.json({
+      accounts: result.accounts,
+      count: result.total,
+      total: result.total,
+      page,
+      pageSize,
+      limited: result.limited,
+    });
   } catch (err) {
     handleError(res, err, 'LIST_ACCOUNTS_FAILED');
   }
@@ -222,6 +231,14 @@ function requireAuth(req, res, next) {
   res.status(401).json({ error: '未登录' });
 }
 
+function readBoundedInteger(value, fallback, max) {
+  const number = Number(value || fallback);
+  if (!Number.isSafeInteger(number) || number < 1) {
+    return fallback;
+  }
+  return Math.min(number, max);
+}
+
 function normalizeDomain(domain) {
   return String(domain || '').trim().toLowerCase().replace(/^@/, '');
 }
@@ -332,7 +349,12 @@ function httpsJson(urlString, { method, headers, body }) {
 }
 
 async function listAccountPage({ position = 0, limit = 500 }) {
-  const query = { position, limit };
+  const query = {
+    position,
+    limit,
+    calculateTotal: true,
+    sort: [{ property: 'name', isAscending: true }],
+  };
   const data = await stalwartJmap([
     ['x:Account/query', query, 'q'],
     ['x:Account/get', { '#ids': { resultOf: 'q', name: 'x:Account/query', path: '/ids' } }, 'g'],
@@ -349,22 +371,51 @@ async function listAccountPage({ position = 0, limit = 500 }) {
       usedDiskQuota: account.usedDiskQuota || 0,
       description: account.description || '',
     }));
-  return { accounts, ids: queryResult.ids || [] };
+  return { accounts, ids: queryResult.ids || [], total: normalizeTotal(queryResult.total) };
 }
 
-async function listAccounts({ prefix, limit }) {
-  const results = [];
-  const pageSize = 500;
-  let position = 0;
+async function listAccounts({ prefix, search, page, pageSize }) {
+  if (prefix || search) {
+    return listFilteredAccounts({ prefix, search, page, pageSize });
+  }
 
-  while (position < config.accountScanLimit && results.length < limit) {
-    const pageLimit = Math.min(pageSize, config.accountScanLimit - position);
+  const position = (page - 1) * pageSize;
+  if (position >= config.accountScanLimit) {
+    return { accounts: [], total: config.accountScanLimit, limited: true };
+  }
+
+  const { accounts, ids, total } = await listAccountPage({
+    position,
+    limit: Math.min(pageSize, config.accountScanLimit - position),
+  });
+  const nextTotal = total ?? position + ids.length;
+  return {
+    accounts,
+    total: Math.min(nextTotal, config.accountScanLimit),
+    limited: nextTotal > config.accountScanLimit,
+  };
+}
+
+async function listFilteredAccounts({ prefix, search, page, pageSize }) {
+  const results = [];
+  const offset = (page - 1) * pageSize;
+  const fetchSize = 500;
+  let matched = 0;
+  let position = 0;
+  let limited = false;
+
+  while (position < config.accountScanLimit) {
+    const pageLimit = Math.min(fetchSize, config.accountScanLimit - position);
     const { accounts, ids } = await listAccountPage({ position, limit: pageLimit });
-    const filtered = accounts.filter((account) => {
-      const emailAddress = String(account.emailAddress || '').toLowerCase();
-      return !prefix || emailAddress.startsWith(prefix);
-    });
-    results.push(...filtered.slice(0, limit - results.length));
+    for (const account of accounts) {
+      if (!accountMatches(account, { prefix, search })) {
+        continue;
+      }
+      if (matched >= offset && results.length < pageSize) {
+        results.push(account);
+      }
+      matched += 1;
+    }
 
     if (ids.length < pageLimit) {
       break;
@@ -372,7 +423,29 @@ async function listAccounts({ prefix, limit }) {
     position += ids.length;
   }
 
-  return results.sort((a, b) => String(a.emailAddress).localeCompare(String(b.emailAddress)));
+  if (position >= config.accountScanLimit) {
+    limited = true;
+  }
+
+  return { accounts: results, total: matched, limited };
+}
+
+function normalizeTotal(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function accountMatches(account, { prefix, search }) {
+  const emailAddress = String(account.emailAddress || '').toLowerCase();
+  const name = String(account.name || '').toLowerCase();
+  const description = String(account.description || '').toLowerCase();
+  if (prefix && !emailAddress.startsWith(prefix)) {
+    return false;
+  }
+  if (!search) {
+    return true;
+  }
+  return emailAddress.includes(search) || name.includes(search) || description.includes(search);
 }
 
 async function findExistingAccounts(addresses) {
