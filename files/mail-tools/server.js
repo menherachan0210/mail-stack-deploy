@@ -23,6 +23,7 @@ const config = {
   stalwartTlsRejectUnauthorized: process.env.STALWART_TLS_REJECT_UNAUTHORIZED === 'true',
   mailDomain: process.env.MAIL_DOMAIN || 'edu.qlht.uk',
   domainId: process.env.STALWART_DOMAIN_ID || '',
+  accountScanLimit: Number(process.env.ACCOUNT_SCAN_LIMIT || 20000),
   imapHost: process.env.IMAP_HOST || 'mail.edu.qlht.uk',
   imapPort: Number(process.env.IMAP_PORT || 993),
   imapTlsRejectUnauthorized: process.env.IMAP_TLS_REJECT_UNAUTHORIZED === 'true',
@@ -104,14 +105,53 @@ router.post('/api/accounts/bulk-create', requireAuth, async (req, res) => {
       return;
     }
 
-    const preview = names.map((name) => `${name}@${config.mailDomain}`);
+    const preview = names.map((name) => ({
+      localPart: name,
+      emailAddress: `${name}@${config.mailDomain}`,
+    }));
+    const existing = await findExistingAccounts(preview.map((item) => item.emailAddress));
+    const accounts = preview.map((item) => {
+      const current = existing.get(item.emailAddress);
+      return current
+        ? { ...item, status: 'exists', id: current.id, detail: '已存在，创建时将自动跳过' }
+        : { ...item, status: 'pending', detail: '可创建' };
+    });
+
     if (dryRun) {
-      res.json({ dryRun: true, count: preview.length, accounts: preview });
+      const existingCount = accounts.filter((item) => item.status === 'exists').length;
+      res.json({
+        dryRun: true,
+        count: accounts.length,
+        accounts,
+        summary: {
+          total: accounts.length,
+          existing: existingCount,
+          pending: accounts.length - existingCount,
+        },
+      });
       return;
     }
 
-    const result = await createAccounts(names, String(password));
-    res.json({ requested: preview.length, ...result });
+    const namesToCreate = accounts
+      .filter((item) => item.status !== 'exists')
+      .map((item) => item.localPart);
+    const skipped = accounts
+      .filter((item) => item.status === 'exists')
+      .map((item) => ({
+        localPart: item.localPart,
+        emailAddress: item.emailAddress,
+        id: item.id,
+        reason: '邮箱已存在，已跳过，密码不会被修改',
+      }));
+    const result = namesToCreate.length
+      ? await createAccounts(namesToCreate, String(password))
+      : { created: [], notCreated: [] };
+
+    res.json({
+      requested: preview.length,
+      skipped,
+      ...result,
+    });
   } catch (err) {
     handleError(res, err, 'BULK_CREATE_FAILED');
   }
@@ -291,16 +331,16 @@ function httpsJson(urlString, { method, headers, body }) {
   });
 }
 
-async function listAccounts({ prefix, limit }) {
-  const query = { limit };
+async function listAccountPage({ position = 0, limit = 500 }) {
+  const query = { position, limit };
   const data = await stalwartJmap([
     ['x:Account/query', query, 'q'],
     ['x:Account/get', { '#ids': { resultOf: 'q', name: 'x:Account/query', path: '/ids' } }, 'g'],
   ]);
+  const queryResult = data.methodResponses.find(([name]) => name === 'x:Account/query')?.[1] || {};
   const get = data.methodResponses.find(([name]) => name === 'x:Account/get')?.[1];
   const accounts = (get?.list || [])
     .filter((account) => account['@type'] === 'User')
-    .filter((account) => !prefix || account.emailAddress?.startsWith(prefix))
     .map((account) => ({
       id: account.id,
       name: account.name,
@@ -309,7 +349,44 @@ async function listAccounts({ prefix, limit }) {
       usedDiskQuota: account.usedDiskQuota || 0,
       description: account.description || '',
     }));
-  return accounts;
+  return { accounts, ids: queryResult.ids || [] };
+}
+
+async function listAccounts({ prefix, limit }) {
+  const { accounts } = await listAccountPage({ limit });
+  return accounts
+    .filter((account) => !prefix || account.emailAddress?.startsWith(prefix))
+    .slice(0, limit);
+}
+
+async function findExistingAccounts(addresses) {
+  const wanted = new Set(addresses.map((address) => String(address).toLowerCase()));
+  const found = new Map();
+  const pageSize = 500;
+  let position = 0;
+
+  while (position < config.accountScanLimit && found.size < wanted.size) {
+    const limit = Math.min(pageSize, config.accountScanLimit - position);
+    const { accounts, ids } = await listAccountPage({ position, limit });
+    for (const account of accounts) {
+      const address = String(account.emailAddress || '').toLowerCase();
+      if (wanted.has(address)) {
+        found.set(address, account);
+      }
+    }
+    if (ids.length < limit) {
+      break;
+    }
+    position += ids.length;
+  }
+
+  if (position >= config.accountScanLimit && found.size < wanted.size) {
+    const error = new Error(`账号数量超过扫描上限 ${config.accountScanLimit}，请提高 ACCOUNT_SCAN_LIMIT 后重试`);
+    error.status = 500;
+    throw error;
+  }
+
+  return found;
 }
 
 async function createAccounts(names, password) {

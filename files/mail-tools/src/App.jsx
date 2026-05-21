@@ -95,7 +95,7 @@ export function MailToolsApp({ icons }) {
   async function confirmCreate(values) {
     modal.confirm({
       title: '确认创建邮箱账号？',
-      content: `${values.prefix}${String(values.start).padStart(values.width, '0')} 到 ${values.prefix}${String(values.end).padStart(values.width, '0')}`,
+      content: `${values.prefix}${String(values.start).padStart(values.width, '0')} 到 ${values.prefix}${String(values.end).padStart(values.width, '0')}，已存在的邮箱会自动跳过，密码不会被修改。`,
       okText: '创建',
       cancelText: '取消',
       onOk: () => runBulk(values, false),
@@ -110,20 +110,31 @@ export function MailToolsApp({ icons }) {
         body: { ...values, dryRun },
       });
       if (dryRun) {
-        setCreateRows(data.accounts.map((email) => ({ key: email, email, status: '待创建', detail: '' })));
+        setCreateRows(data.accounts.map(toCreateRow));
         setMessages([]);
         setSelectedMessage(null);
-        setResultText(`预览 ${data.count} 个账号。`);
+        setResultText(
+          `预览 ${data.summary.total} 个账号：可创建 ${data.summary.pending} 个，已存在 ${data.summary.existing} 个。`,
+        );
         return;
       }
+      const created = data.created || [];
+      const skipped = data.skipped || [];
+      const notCreated = data.notCreated || [];
       const rows = [
-        ...data.created.map((row) => ({
+        ...created.map((row) => ({
           key: row.emailAddress,
           email: row.emailAddress,
           status: '成功',
           detail: row.id || '',
         })),
-        ...data.notCreated.map((row) => ({
+        ...skipped.map((row) => ({
+          key: row.emailAddress,
+          email: row.emailAddress,
+          status: '已跳过',
+          detail: row.reason || '邮箱已存在',
+        })),
+        ...notCreated.map((row) => ({
           key: row.emailAddress,
           email: row.emailAddress,
           status: '失败',
@@ -133,7 +144,9 @@ export function MailToolsApp({ icons }) {
       setCreateRows(rows);
       setMessages([]);
       setSelectedMessage(null);
-      setResultText(`创建完成：成功 ${data.created.length} 个，失败 ${data.notCreated.length} 个。`);
+      setResultText(
+        `创建完成：成功 ${created.length} 个，跳过 ${skipped.length} 个，失败 ${notCreated.length} 个。`,
+      );
     } catch (err) {
       message.error(err.message);
       setResultText(err.message);
@@ -221,7 +234,7 @@ export function MailToolsApp({ icons }) {
         title: '状态',
         dataIndex: 'status',
         width: 110,
-        render: (status) => <Tag color={status === '成功' ? 'green' : status === '失败' ? 'red' : 'blue'}>{status}</Tag>,
+        render: (status) => <Tag color={statusColor(status)}>{status}</Tag>,
       },
       { title: '详情', dataIndex: 'detail', ellipsis: true },
     ];
@@ -505,6 +518,23 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function toCreateRow(account) {
+  const status = account.status === 'exists' ? '已存在' : '待创建';
+  return {
+    key: account.emailAddress,
+    email: account.emailAddress,
+    status,
+    detail: account.detail || '',
+  };
+}
+
+function statusColor(status) {
+  if (status === '成功') return 'green';
+  if (status === '失败') return 'red';
+  if (status === '已存在' || status === '已跳过') return 'gold';
+  return 'blue';
 }
 
 function formatSize(value) {

@@ -7,7 +7,7 @@ The stack includes:
 - [Stalwart Mail Server](https://stalw.art/) for SMTP, IMAP, POP3, JMAP, DKIM, and domain management
 - [Roundcube](https://roundcube.net/) as the webmail client
 - A React + Ant Design administration tool for:
-  - bulk mailbox creation
+  - bulk mailbox creation with existing-account detection and safe skipping
   - inbox lookup by mailbox credentials
   - message preview
 - Nginx reverse proxy
