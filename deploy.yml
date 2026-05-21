@@ -12,6 +12,9 @@
           - mail_host is match('^[A-Za-z0-9.-]+$')
           - webmail_host is match('^[A-Za-z0-9.-]+$')
           - admin_email is match('^.+@.+$')
+          - web_proxy_mode in ['auto', 'managed', 'external']
+          - (local_port_range_start | int) > 1024
+          - (local_port_range_end | int) >= (local_port_range_start | int)
         fail_msg: "Please set domain, mail_host, webmail_host, and admin_email in group_vars/all.yml."
 
     - name: Create local secret directory
@@ -38,16 +41,14 @@
           - "Stack root: {{ stack_root }}"
 
   tasks:
-    - name: Install packages on RHEL compatible systems
+    - name: Install common packages on RHEL compatible systems
       ansible.builtin.dnf:
         name:
           - curl
           - ca-certificates
           - tar
           - gzip
-          - nginx
-          - certbot
-          - python3-certbot-nginx
+          - iproute
           - python3-pip
           - python3-cryptography
           - bind-utils
@@ -55,22 +56,75 @@
         state: present
       when: ansible_os_family == "RedHat"
 
-    - name: Install packages on Debian compatible systems
+    - name: Install common packages on Debian compatible systems
       ansible.builtin.apt:
         name:
           - curl
           - ca-certificates
           - tar
           - gzip
-          - nginx
-          - certbot
-          - python3-certbot-nginx
+          - iproute2
           - python3-pip
           - python3-cryptography
           - dnsutils
         state: present
         update_cache: true
       when: ansible_os_family == "Debian"
+
+    - name: Probe public web port ownership
+      ansible.builtin.shell: |
+        set -euo pipefail
+        external=0
+        for port in 80 443; do
+          listeners="$(ss -ltnp "( sport = :$port )" 2>/dev/null | awk 'NR>1 {print}' || true)"
+          if [ -n "$listeners" ] && ! printf '%s\n' "$listeners" | grep -q 'users:(("nginx",'; then
+            external=1
+          fi
+        done
+        echo "web_ports_external=$external"
+      args:
+        executable: /bin/bash
+      register: web_port_probe
+      changed_when: false
+
+    - name: Set effective web proxy mode
+      ansible.builtin.set_fact:
+        web_public_ports_need_external: "{{ web_port_probe.stdout is search('web_ports_external=1') }}"
+        web_proxy_mode_effective: "{{ 'external' if (web_proxy_mode == 'external' or (web_proxy_mode == 'auto' and (web_port_probe.stdout is search('web_ports_external=1')))) else 'managed' }}"
+
+    - name: Stop when managed web proxy ports are occupied by another service
+      ansible.builtin.fail:
+        msg: "Ports 80 or 443 are already used by a non-Nginx service. Set web_proxy_mode=auto or web_proxy_mode=external, then connect your existing reverse proxy to the generated local upstreams."
+      when:
+        - web_proxy_mode == "managed"
+        - web_public_ports_need_external | bool
+
+    - name: Show effective web proxy mode
+      ansible.builtin.debug:
+        msg: "Web proxy mode: {{ web_proxy_mode_effective }}"
+
+    - name: Install Nginx and Certbot on RHEL compatible systems
+      ansible.builtin.dnf:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+        state: present
+      when:
+        - ansible_os_family == "RedHat"
+        - web_proxy_mode_effective == "managed"
+
+    - name: Install Nginx and Certbot on Debian compatible systems
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: true
+      when:
+        - ansible_os_family == "Debian"
+        - web_proxy_mode_effective == "managed"
 
     - name: Install Docker on RHEL compatible systems
       ansible.builtin.dnf:
@@ -89,11 +143,26 @@
         update_cache: true
       when: ansible_os_family == "Debian"
 
+    - name: Enable Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
     - name: Check mail protocol port availability before starting services
       ansible.builtin.shell: |
-        set -e
+        set -euo pipefail
+        stack_owns_port() {
+          local container="$1"
+          local port="$2"
+          docker ps --format '{{ "{{.Names}}" }}' | grep -qx "$container" || return 1
+          docker port "$container" 2>/dev/null | grep -Eq ":${port}$"
+        }
         for port in {{ port_check_ports | join(' ') }}; do
           if ss -ltn "( sport = :$port )" | awk 'NR>1 {print}' | grep -q .; then
+            if stack_owns_port stalwart "$port"; then
+              continue
+            fi
             echo "Port $port is already listening. Stop the existing service or set skip_port_check=true."
             ss -ltnp "( sport = :$port )" || true
             exit 1
@@ -104,14 +173,126 @@
       changed_when: false
       when: not (skip_port_check | bool)
 
-    - name: Enable Docker and Nginx
+    - name: Select local reverse-proxy ports
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        range_start={{ local_port_range_start | int }}
+        range_end={{ local_port_range_end | int }}
+        auto_select={{ auto_select_local_ports | bool | ternary('1', '0') }}
+        compose_file="{{ stack_root }}/compose.yml"
+        chosen_file="$(mktemp)"
+        trap 'rm -f "$chosen_file"' EXIT
+
+        port_in_use() {
+          ss -ltn "( sport = :$1 )" | awk 'NR>1 {print}' | grep -q .
+        }
+
+        stack_owns_port() {
+          local container="$1"
+          local port="$2"
+          docker ps --format '{{ "{{.Names}}" }}' | grep -qx "$container" || return 1
+          docker port "$container" 2>/dev/null | grep -Eq ":${port}$"
+        }
+
+        existing_port_for() {
+          local internal_port="$1"
+          [ -f "$compose_file" ] || return 0
+          grep -E "127[.]0[.]0[.]1:[0-9]+:${internal_port}($|[\"[:space:]])" "$compose_file" \
+            | head -n 1 \
+            | sed -E 's/.*127[.]0[.]0[.]1:([0-9]+):.*/\1/' || true
+        }
+
+        already_chosen() {
+          local candidate="$1"
+          grep -qx "$candidate" "$chosen_file"
+        }
+
+        remember_port() {
+          printf '%s\n' "$1" >> "$chosen_file"
+        }
+
+        choose_port() {
+          local name="$1"
+          local requested="$2"
+          local internal_port="$3"
+          local container="$4"
+          local existing preferred port
+
+          existing="$(existing_port_for "$internal_port")"
+          preferred="${existing:-$requested}"
+
+          if [ -n "$existing" ]; then
+            if ! port_in_use "$existing" || stack_owns_port "$container" "$existing"; then
+              remember_port "$existing"
+              printf '%s\n' "$existing"
+              return
+            fi
+          fi
+
+          if ! already_chosen "$preferred" && (! port_in_use "$preferred" || stack_owns_port "$container" "$preferred"); then
+            remember_port "$preferred"
+            printf '%s\n' "$preferred"
+            return
+          fi
+
+          if [ "$auto_select" != "1" ]; then
+            echo "Local port $preferred for $name is already in use. Enable auto_select_local_ports or choose another port." >&2
+            ss -ltnp "( sport = :$preferred )" >&2 || true
+            exit 1
+          fi
+
+          for port in $(seq "$range_start" "$range_end"); do
+            if ! already_chosen "$port" && ! port_in_use "$port"; then
+              remember_port "$port"
+              printf '%s\n' "$port"
+              return
+            fi
+          done
+
+          echo "No free local port found for $name in range ${range_start}-${range_end}." >&2
+          exit 1
+        }
+
+        stalwart_http="$(choose_port stalwart_http {{ stalwart_http_port | int }} 8080 stalwart)"
+        stalwart_https="$(choose_port stalwart_https {{ stalwart_https_port | int }} 443 stalwart)"
+        roundcube_http="$(choose_port roundcube_http {{ roundcube_http_port | int }} 80 roundcube)"
+        tools_http="$(choose_port mail_tools {{ tools_port | int }} 8091 mail-tools)"
+
+        printf 'stalwart_http_port_effective: %s\n' "$stalwart_http"
+        printf 'stalwart_https_port_effective: %s\n' "$stalwart_https"
+        printf 'roundcube_http_port_effective: %s\n' "$roundcube_http"
+        printf 'tools_port_effective: %s\n' "$tools_http"
+      args:
+        executable: /bin/bash
+      register: local_port_selection
+      changed_when: false
+
+    - name: Store selected local ports
+      ansible.builtin.set_fact:
+        selected_local_ports: "{{ local_port_selection.stdout | from_yaml }}"
+
+    - name: Apply selected local ports
+      ansible.builtin.set_fact:
+        stalwart_http_port_effective: "{{ selected_local_ports.stalwart_http_port_effective }}"
+        stalwart_https_port_effective: "{{ selected_local_ports.stalwart_https_port_effective }}"
+        roundcube_http_port_effective: "{{ selected_local_ports.roundcube_http_port_effective }}"
+        tools_port_effective: "{{ selected_local_ports.tools_port_effective }}"
+
+    - name: Show selected local ports
+      ansible.builtin.debug:
+        msg:
+          - "Stalwart HTTP local port: {{ stalwart_http_port_effective }}"
+          - "Stalwart HTTPS local port: {{ stalwart_https_port_effective }}"
+          - "Roundcube local port: {{ roundcube_http_port_effective }}"
+          - "Mail tools local port: {{ tools_port_effective }}"
+
+    - name: Enable Nginx
       ansible.builtin.systemd:
-        name: "{{ item }}"
+        name: nginx
         enabled: true
         state: started
-      loop:
-        - docker
-        - nginx
+      when: web_proxy_mode_effective == "managed"
 
     - name: Open firewall ports when firewalld exists
       ansible.builtin.command: "firewall-cmd --permanent --add-port={{ item }}/tcp"
@@ -236,22 +417,34 @@
         src: nginx-mail.conf.j2
         dest: "/etc/nginx/conf.d/{{ mail_host }}.conf"
         mode: "0644"
+      when: web_proxy_mode_effective == "managed"
 
     - name: Render Nginx webmail config
       ansible.builtin.template:
         src: nginx-webmail.conf.j2
         dest: "/etc/nginx/conf.d/{{ webmail_host }}.conf"
         mode: "0644"
-      when: enable_roundcube | bool
+      when:
+        - enable_roundcube | bool
+        - web_proxy_mode_effective == "managed"
+
+    - name: Render external reverse proxy upstream notes
+      ansible.builtin.template:
+        src: external-proxy-upstreams.txt.j2
+        dest: "{{ stack_root }}/external-proxy-upstreams.txt"
+        mode: "0644"
+      when: web_proxy_mode_effective == "external"
 
     - name: Validate Nginx config
       ansible.builtin.command: nginx -t
       changed_when: false
+      when: web_proxy_mode_effective == "managed"
 
     - name: Reload Nginx
       ansible.builtin.systemd:
         name: nginx
         state: reloaded
+      when: web_proxy_mode_effective == "managed"
 
     - name: Request Let's Encrypt certificates
       ansible.builtin.command: >
@@ -265,7 +458,16 @@
         {{ force_renew_certificates | bool | ternary('--force-renewal', '') }}
       register: certbot_result
       changed_when: "'Congratulations' in certbot_result.stdout or 'Successfully' in certbot_result.stdout"
-      when: request_letsencrypt | bool
+      when:
+        - request_letsencrypt | bool
+        - web_proxy_mode_effective == "managed"
+
+    - name: Show external reverse proxy note
+      ansible.builtin.debug:
+        msg:
+          - "External reverse proxy mode is active. Configure your existing proxy with {{ stack_root }}/external-proxy-upstreams.txt."
+          - "This playbook did not request Let's Encrypt certificates because ports 80/443 are owned outside this stack."
+      when: web_proxy_mode_effective == "external"
 
     - name: Run health checks
       ansible.builtin.command: "{{ stack_root }}/scripts/healthcheck.sh"
@@ -283,5 +485,6 @@
           - "Stalwart admin: https://{{ mail_host }}/admin/"
           - "Roundcube: https://{{ webmail_host }}/"
           - "Mail tools: https://{{ mail_host }}{{ tools_base_path }}/"
+          - "Web proxy mode: {{ web_proxy_mode_effective }}"
           - "Credentials file on server: {{ stack_root }}/credentials.txt"
           - "DNS record file on server: {{ stack_root }}/dns-records.txt"

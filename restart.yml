@@ -10,7 +10,11 @@
         chdir: "{{ stack_root | default('/opt/mail-stack') }}"
       changed_when: true
 
-    - name: Reload Nginx
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
+    - name: Reload Nginx when available
       ansible.builtin.systemd:
         name: nginx
         state: reloaded
+      when: "'nginx.service' in ansible_facts.services"

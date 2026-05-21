@@ -1,0 +1,70 @@
+External reverse proxy upstreams
+
+This stack is running in external reverse proxy mode. Ports 80 and 443 are
+owned by another service, so this playbook did not install or manage public
+Nginx virtual hosts for the web interfaces.
+
+Configure the existing reverse proxy on this server to route these public
+hosts to the local upstreams below.
+
+Mail host:
+  host: {{ mail_host }}
+  public admin URL: https://{{ mail_host }}/admin/
+  path: /
+  upstream: http://127.0.0.1:{{ stalwart_http_port_effective }}/
+
+{% if enable_mail_tools | bool %}
+Mail tools:
+  host: {{ mail_host }}
+  path: {{ tools_base_path }}/
+  upstream: http://127.0.0.1:{{ tools_port_effective }}{{ tools_base_path }}/
+
+{% endif %}
+{% if enable_roundcube | bool %}
+Roundcube:
+  host: {{ webmail_host }}
+  path: /
+  upstream: http://127.0.0.1:{{ roundcube_http_port_effective }}/
+
+{% endif %}
+Recommended Nginx locations:
+
+server {
+    listen 443 ssl http2;
+    server_name {{ mail_host }};
+
+{% if enable_mail_tools | bool %}
+    location {{ tools_base_path }}/ {
+        proxy_pass http://127.0.0.1:{{ tools_port_effective }}{{ tools_base_path }}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+{% endif %}
+    location / {
+        proxy_pass http://127.0.0.1:{{ stalwart_http_port_effective }}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+{% if enable_roundcube | bool %}
+server {
+    listen 443 ssl http2;
+    server_name {{ webmail_host }};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ roundcube_http_port_effective }}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{% endif %}

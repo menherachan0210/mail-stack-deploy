@@ -14,7 +14,7 @@ if [ -s "{{ stalwart_config_dir }}/config.json" ]; then
 fi
 
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:8088/jmap/session" >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:{{ stalwart_http_port_effective }}/jmap/session" >/dev/null 2>&1; then
     break
   fi
   sleep 2
@@ -71,7 +71,7 @@ RESPONSE="$(curl -fsS \
   -H "Authorization: Basic $AUTH" \
   -H "Content-Type: application/json" \
   --data @"$BOOTSTRAP_JSON" \
-  "http://127.0.0.1:8088/jmap")"
+  "http://127.0.0.1:{{ stalwart_http_port_effective }}/jmap")"
 rm -f "$BOOTSTRAP_JSON"
 
 if echo "$RESPONSE" | grep -q '"notUpdated"'; then
@@ -122,6 +122,10 @@ Mail tools username: {{ tools_admin_user }}
 Mail tools password: {{ tools_admin_password_final }}
 
 Default mailbox password: {{ tools_default_mail_password }}
+{% if web_proxy_mode_effective == "external" %}
+
+External reverse proxy notes: {{ stack_root }}/external-proxy-upstreams.txt
+{% endif %}
 EOF
 chmod 600 "$CREDENTIALS_FILE"
 

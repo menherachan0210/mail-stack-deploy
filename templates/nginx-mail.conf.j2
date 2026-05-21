@@ -12,7 +12,7 @@ server {
 
 {% if enable_mail_tools | bool %}
     location {{ tools_base_path }}/ {
-        proxy_pass http://127.0.0.1:{{ tools_port }}{{ tools_base_path }}/;
+        proxy_pass http://127.0.0.1:{{ tools_port_effective }}{{ tools_base_path }}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -26,7 +26,7 @@ server {
 
 {% if enable_stalwart_admin_proxy | bool %}
     location / {
-        proxy_pass http://127.0.0.1:8088;
+        proxy_pass http://127.0.0.1:{{ stalwart_http_port_effective }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

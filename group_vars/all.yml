@@ -17,7 +17,6 @@ roundcube_image: roundcube/roundcubemail:latest
 tools_admin_user: admin
 tools_default_mail_password: "132456798oxy"
 tools_base_path: /tools
-tools_port: 8091
 
 bootstrap_recovery_user: bootstrap-admin
 bootstrap_recovery_password: ""
@@ -29,6 +28,23 @@ request_letsencrypt: true
 force_renew_certificates: false
 skip_dns_check: false
 skip_port_check: false
+
+# managed: this playbook installs and configures Nginx on ports 80/443.
+# external: keep existing 80/443 service and generate reverse-proxy upstreams.
+# auto: use managed mode when 80/443 are free or already handled by Nginx;
+#       otherwise fall back to external mode.
+web_proxy_mode: auto
+
+# Local host ports used between Docker containers and the reverse proxy.
+# These ports are bound to 127.0.0.1 only. If any are occupied, the playbook
+# can automatically choose another free port from the range below.
+auto_select_local_ports: true
+local_port_range_start: 18080
+local_port_range_end: 18199
+stalwart_http_port: 8088
+stalwart_https_port: 8443
+roundcube_http_port: 8089
+tools_port: 8091
 
 enable_roundcube: true
 enable_mail_tools: true

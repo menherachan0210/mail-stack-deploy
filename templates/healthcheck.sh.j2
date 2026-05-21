@@ -4,12 +4,12 @@ set -euo pipefail
 cd "{{ stack_root }}"
 docker compose ps
 
-curl -fsS "http://127.0.0.1:8088/admin/" >/dev/null
+curl -fsS "http://127.0.0.1:{{ stalwart_http_port_effective }}/admin/" >/dev/null
 {% if enable_roundcube | bool %}
-curl -fsS "http://127.0.0.1:8089/" >/dev/null
+curl -fsS "http://127.0.0.1:{{ roundcube_http_port_effective }}/" >/dev/null
 {% endif %}
 {% if enable_mail_tools | bool %}
-curl -fsS "http://127.0.0.1:{{ tools_port }}{{ tools_base_path }}/api/session" >/dev/null
+curl -fsS "http://127.0.0.1:{{ tools_port_effective }}{{ tools_base_path }}/api/session" >/dev/null
 {% endif %}
 
 echo "HEALTHCHECK_OK=1"
