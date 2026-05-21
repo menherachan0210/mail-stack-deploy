@@ -89,13 +89,13 @@ body {
 }
 
 .app-content {
-  width: min(1360px, calc(100vw - 280px));
+  width: min(1040px, calc(100vw - 280px));
   margin: 0 auto;
   padding: 22px 0 40px;
 }
 
-.section-card {
-  scroll-margin-top: 24px;
+.page-card {
+  min-height: 480px;
 }
 
 .full-width {
@@ -135,7 +135,7 @@ body {
   }
 
   .app-content {
-    width: min(100vw - 24px, 1360px);
+    width: min(100vw - 24px, 1040px);
   }
 }
 
@@ -147,7 +147,7 @@ body {
   }
 
   .app-content {
-    width: min(100vw - 20px, 1360px);
+    width: min(100vw - 20px, 1040px);
     padding-top: 12px;
   }
 }

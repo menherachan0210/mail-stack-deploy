@@ -85,11 +85,8 @@ export function MailToolsApp({ icons }) {
     setResultText('等待操作。');
   }
 
-  function focusSection(key) {
+  function openSection(key) {
     setActiveSection(key);
-    window.requestAnimationFrame(() => {
-      document.getElementById(`section-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
   }
 
   async function previewAccounts() {
@@ -123,7 +120,7 @@ export function MailToolsApp({ icons }) {
         setCreateRows(data.accounts.map(toCreateRow));
         setMessages([]);
         setSelectedMessage(null);
-        focusSection('results');
+        openSection('results');
         setResultText(
           `预览 ${data.summary.total} 个账号：可创建 ${data.summary.pending} 个，已存在 ${data.summary.existing} 个。`,
         );
@@ -155,7 +152,7 @@ export function MailToolsApp({ icons }) {
       setCreateRows(rows);
       setMessages([]);
       setSelectedMessage(null);
-      focusSection('results');
+      openSection('results');
       setResultText(
         `创建完成：成功 ${created.length} 个，跳过 ${skipped.length} 个，失败 ${notCreated.length} 个。`,
       );
@@ -180,7 +177,7 @@ export function MailToolsApp({ icons }) {
       setMailboxAuth({ address, password: values.password });
       setMessages(data.messages.map((item) => ({ ...item, key: item.uid })));
       setCreateRows([]);
-      focusSection('results');
+      openSection('results');
       setResultText(`${data.address} 收件箱：${data.messages.length} 封邮件。`);
       if (!data.messages.length) {
         message.info('收件箱暂无邮件');
@@ -202,7 +199,7 @@ export function MailToolsApp({ icons }) {
         `/api/mailboxes/${encodeURIComponent(mailboxAuth.address)}/messages/${uid}?${params}`,
       );
       setSelectedMessage(data.message);
-      focusSection('message');
+      openSection('message');
       setResultText(`已打开邮件 #${uid}。`);
     } catch (err) {
       message.error(err.message);
@@ -316,7 +313,7 @@ export function MailToolsApp({ icons }) {
           mode="inline"
           selectedKeys={[activeSection]}
           items={sidebarItems}
-          onClick={({ key }) => focusSection(key)}
+          onClick={({ key }) => openSection(key)}
         />
         <div className="sider-footer">
           <Typography.Text type="secondary">已登录</Typography.Text>
@@ -340,11 +337,9 @@ export function MailToolsApp({ icons }) {
         </Layout.Header>
 
         <Layout.Content className="app-content">
-          <Row gutter={[16, 16]}>
-            <Col xs={24} xl={12}>
+          {activeSection === 'bulk' ? (
             <Card
-              id="section-bulk"
-              className="section-card"
+              className="page-card"
               title={
                 <Space>
                   <Icon.UserAddOutlined />
@@ -431,12 +426,11 @@ export function MailToolsApp({ icons }) {
                 </Space>
               </Form>
             </Card>
-            </Col>
+          ) : null}
 
-            <Col xs={24} xl={12}>
+          {activeSection === 'inbox' ? (
             <Card
-              id="section-inbox"
-              className="section-card"
+              className="page-card"
               title={
                 <Space>
                   <Icon.InboxOutlined />
@@ -496,12 +490,11 @@ export function MailToolsApp({ icons }) {
                 </Row>
               </Form>
             </Card>
-            </Col>
+          ) : null}
 
-            <Col xs={24}>
+          {activeSection === 'results' ? (
             <Card
-              id="section-results"
-              className="section-card"
+              className="page-card"
               title="结果"
               extra={<Typography.Text type="secondary">{resultText}</Typography.Text>}
             >
@@ -525,10 +518,10 @@ export function MailToolsApp({ icons }) {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无结果" />
               )}
             </Card>
-            </Col>
+          ) : null}
 
-            <Col xs={24}>
-            <Card id="section-message" className="section-card" title="邮件内容" loading={messageLoading}>
+          {activeSection === 'message' ? (
+            <Card className="page-card" title="邮件内容" loading={messageLoading}>
               {selectedMessage ? (
                 <Space direction="vertical" size={16} className="full-width">
                   <Descriptions
@@ -560,8 +553,7 @@ export function MailToolsApp({ icons }) {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一封邮件查看正文" />
               )}
             </Card>
-            </Col>
-          </Row>
+          ) : null}
         </Layout.Content>
       </Layout>
     </Layout>
