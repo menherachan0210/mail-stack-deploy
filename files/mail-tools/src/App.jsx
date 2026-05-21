@@ -1,0 +1,515 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  App as AntApp,
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Layout,
+  Modal,
+  Row,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import { api } from './api.js';
+
+const DEFAULT_MAIL_PASSWORD = '132456798oxy';
+const DEFAULT_DOMAIN = 'edu.qlht.uk';
+
+export function MailToolsApp({ icons }) {
+  const { message, modal } = AntApp.useApp();
+  const [session, setSession] = useState({ authenticated: false, user: null, domain: DEFAULT_DOMAIN });
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [mailLoading, setMailLoading] = useState(false);
+  const [messageLoading, setMessageLoading] = useState(false);
+  const [resultText, setResultText] = useState('等待操作。');
+  const [createRows, setCreateRows] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [mailboxAuth, setMailboxAuth] = useState({
+    address: `menherachan001@${DEFAULT_DOMAIN}`,
+    password: DEFAULT_MAIL_PASSWORD,
+  });
+  const [loginForm] = Form.useForm();
+  const [bulkForm] = Form.useForm();
+  const [mailForm] = Form.useForm();
+
+  const Icon = icons || {};
+  const domain = session.domain || DEFAULT_DOMAIN;
+
+  useEffect(() => {
+    api('/api/session')
+      .then((data) => setSession(data))
+      .catch((err) => message.error(err.message))
+      .finally(() => setSessionLoading(false));
+  }, [message]);
+
+  const loggedIn = Boolean(session.authenticated);
+
+  async function handleLogin(values) {
+    setLoginLoading(true);
+    try {
+      await api('/api/login', { method: 'POST', body: values });
+      setSession({ authenticated: true, user: values.username, domain });
+      message.success('登录成功');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await api('/api/logout', { method: 'POST', body: {} });
+    } catch {
+      // Session may already be gone.
+    }
+    setSession({ authenticated: false, user: null, domain });
+    setCreateRows([]);
+    setMessages([]);
+    setSelectedMessage(null);
+    setResultText('等待操作。');
+  }
+
+  async function previewAccounts() {
+    try {
+      const values = await bulkForm.validateFields();
+      await runBulk(values, true);
+    } catch (err) {
+      if (err?.errorFields) return;
+      message.error(err.message);
+    }
+  }
+
+  async function confirmCreate(values) {
+    modal.confirm({
+      title: '确认创建邮箱账号？',
+      content: `${values.prefix}${String(values.start).padStart(values.width, '0')} 到 ${values.prefix}${String(values.end).padStart(values.width, '0')}`,
+      okText: '创建',
+      cancelText: '取消',
+      onOk: () => runBulk(values, false),
+    });
+  }
+
+  async function runBulk(values, dryRun) {
+    setBulkLoading(true);
+    try {
+      const data = await api('/api/accounts/bulk-create', {
+        method: 'POST',
+        body: { ...values, dryRun },
+      });
+      if (dryRun) {
+        setCreateRows(data.accounts.map((email) => ({ key: email, email, status: '待创建', detail: '' })));
+        setMessages([]);
+        setSelectedMessage(null);
+        setResultText(`预览 ${data.count} 个账号。`);
+        return;
+      }
+      const rows = [
+        ...data.created.map((row) => ({
+          key: row.emailAddress,
+          email: row.emailAddress,
+          status: '成功',
+          detail: row.id || '',
+        })),
+        ...data.notCreated.map((row) => ({
+          key: row.emailAddress,
+          email: row.emailAddress,
+          status: '失败',
+          detail: row.error || '',
+        })),
+      ];
+      setCreateRows(rows);
+      setMessages([]);
+      setSelectedMessage(null);
+      setResultText(`创建完成：成功 ${data.created.length} 个，失败 ${data.notCreated.length} 个。`);
+    } catch (err) {
+      message.error(err.message);
+      setResultText(err.message);
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
+  async function loadInbox(values) {
+    setMailLoading(true);
+    setSelectedMessage(null);
+    try {
+      const address = values.address.trim();
+      const params = new URLSearchParams({
+        password: values.password,
+        limit: String(values.limit || 50),
+      });
+      const data = await api(`/api/mailboxes/${encodeURIComponent(address)}/messages?${params}`);
+      setMailboxAuth({ address, password: values.password });
+      setMessages(data.messages.map((item) => ({ ...item, key: item.uid })));
+      setCreateRows([]);
+      setResultText(`${data.address} 收件箱：${data.messages.length} 封邮件。`);
+      if (!data.messages.length) {
+        message.info('收件箱暂无邮件');
+      }
+    } catch (err) {
+      message.error(err.message);
+      setResultText(err.message);
+    } finally {
+      setMailLoading(false);
+    }
+  }
+
+  async function loadMessage(uid) {
+    if (!mailboxAuth.address || !mailboxAuth.password) return;
+    setMessageLoading(true);
+    try {
+      const params = new URLSearchParams({ password: mailboxAuth.password });
+      const data = await api(
+        `/api/mailboxes/${encodeURIComponent(mailboxAuth.address)}/messages/${uid}?${params}`,
+      );
+      setSelectedMessage(data.message);
+      setResultText(`已打开邮件 #${uid}。`);
+    } catch (err) {
+      message.error(err.message);
+      setResultText(err.message);
+    } finally {
+      setMessageLoading(false);
+    }
+  }
+
+  const resultColumns = useMemo(() => {
+    if (messages.length) {
+      return [
+        {
+          title: '状态',
+          dataIndex: 'seen',
+          width: 88,
+          render: (seen) => <Tag color={seen ? 'default' : 'green'}>{seen ? '已读' : '未读'}</Tag>,
+        },
+        { title: '发件人', dataIndex: 'from', ellipsis: true },
+        {
+          title: '主题',
+          dataIndex: 'subject',
+          ellipsis: true,
+          render: (value) => value || '(无主题)',
+        },
+        {
+          title: '时间',
+          dataIndex: 'date',
+          width: 180,
+          render: formatDate,
+        },
+        {
+          title: '大小',
+          dataIndex: 'size',
+          width: 110,
+          render: formatSize,
+        },
+      ];
+    }
+    return [
+      { title: '邮箱', dataIndex: 'email', ellipsis: true },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 110,
+        render: (status) => <Tag color={status === '成功' ? 'green' : status === '失败' ? 'red' : 'blue'}>{status}</Tag>,
+      },
+      { title: '详情', dataIndex: 'detail', ellipsis: true },
+    ];
+  }, [messages.length]);
+
+  const resultData = messages.length ? messages : createRows;
+
+  if (sessionLoading) {
+    return (
+      <Layout className="app-shell centered">
+        <Card className="login-card">
+          <Space direction="vertical" size={12}>
+            <Typography.Title level={3}>邮箱工具</Typography.Title>
+            <Typography.Text type="secondary">正在检查登录状态...</Typography.Text>
+          </Space>
+        </Card>
+      </Layout>
+    );
+  }
+
+  if (!loggedIn) {
+    return (
+      <Layout className="app-shell centered">
+        <Card className="login-card" title="邮箱工具">
+          <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="on">
+            <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+              <Input autoComplete="username" size="large" />
+            </Form.Item>
+            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+              <Input.Password autoComplete="current-password" size="large" />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" loading={loginLoading} block size="large">
+              登录
+            </Button>
+          </Form>
+        </Card>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout className="app-shell">
+      <Layout.Header className="app-header">
+        <div>
+          <Typography.Title level={3} className="page-title">
+            邮箱工具
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            已登录：{session.user || 'admin'}，域名：{domain}
+          </Typography.Text>
+        </div>
+        <Button icon={<Icon.LogoutOutlined />} onClick={handleLogout}>
+          退出
+        </Button>
+      </Layout.Header>
+
+      <Layout.Content className="app-content">
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={12}>
+            <Card
+              title={
+                <Space>
+                  <Icon.UserAddOutlined />
+                  <span>批量创建邮箱</span>
+                </Space>
+              }
+            >
+              <Form
+                form={bulkForm}
+                layout="vertical"
+                initialValues={{
+                  prefix: 'menherachan',
+                  start: 101,
+                  end: 110,
+                  width: 3,
+                  domain,
+                  password: DEFAULT_MAIL_PASSWORD,
+                }}
+                onFinish={confirmCreate}
+              >
+                <Row gutter={12}>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="prefix"
+                      label="前缀"
+                      rules={[{ required: true, message: '请输入前缀' }]}
+                    >
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="start"
+                      label="起始编号"
+                      rules={[{ required: true, message: '请输入起始编号' }]}
+                    >
+                      <InputNumber min={0} precision={0} className="full-width" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="end"
+                      label="结束编号"
+                      rules={[{ required: true, message: '请输入结束编号' }]}
+                    >
+                      <InputNumber min={0} precision={0} className="full-width" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="width"
+                      label={
+                        <Tooltip title="编号左侧补 0 到指定长度，例如 1 + 3 位会变成 001。">
+                          <span>补零位数</span>
+                        </Tooltip>
+                      }
+                      rules={[{ required: true, message: '请输入补零位数' }]}
+                    >
+                      <InputNumber min={1} max={10} precision={0} className="full-width" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24}>
+                    <Form.Item name="domain" label="域名" rules={[{ required: true, message: '请输入域名' }]}>
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24}>
+                    <Form.Item
+                      name="password"
+                      label="邮箱密码"
+                      rules={[{ required: true, message: '请输入邮箱密码' }]}
+                    >
+                      <Input.Password autoComplete="new-password" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Space wrap>
+                  <Button icon={<Icon.SearchOutlined />} onClick={previewAccounts} loading={bulkLoading}>
+                    预览
+                  </Button>
+                  <Button type="primary" icon={<Icon.PlusOutlined />} htmlType="submit" loading={bulkLoading}>
+                    创建
+                  </Button>
+                </Space>
+              </Form>
+            </Card>
+          </Col>
+
+          <Col xs={24} xl={12}>
+            <Card
+              title={
+                <Space>
+                  <Icon.InboxOutlined />
+                  <span>查看收件箱</span>
+                </Space>
+              }
+            >
+              <Form
+                form={mailForm}
+                layout="vertical"
+                initialValues={{
+                  address: `menherachan001@${domain}`,
+                  password: DEFAULT_MAIL_PASSWORD,
+                  limit: 50,
+                }}
+                onFinish={loadInbox}
+              >
+                <Form.Item
+                  name="address"
+                  label="邮箱地址"
+                  rules={[
+                    { required: true, message: '请输入邮箱地址' },
+                    { type: 'email', message: '邮箱地址格式不正确' },
+                  ]}
+                >
+                  <Input autoComplete="username" />
+                </Form.Item>
+                <Form.Item
+                  name="password"
+                  label="邮箱密码"
+                  rules={[{ required: true, message: '请输入邮箱密码' }]}
+                >
+                  <Input.Password autoComplete="current-password" />
+                </Form.Item>
+                <Row gutter={12} align="bottom">
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="limit"
+                      label="读取数量"
+                      rules={[{ required: true, message: '请输入读取数量' }]}
+                    >
+                      <InputNumber min={1} max={100} precision={0} className="full-width" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item label=" ">
+                      <Button
+                        type="primary"
+                        icon={<Icon.ReloadOutlined />}
+                        htmlType="submit"
+                        loading={mailLoading}
+                      >
+                        刷新
+                      </Button>
+                    </Form.Item>
+                  </Col>
+                </Row>
+              </Form>
+            </Card>
+          </Col>
+
+          <Col xs={24}>
+            <Card
+              title="结果"
+              extra={<Typography.Text type="secondary">{resultText}</Typography.Text>}
+            >
+              {resultData.length ? (
+                <Table
+                  size="middle"
+                  columns={resultColumns}
+                  dataSource={resultData}
+                  pagination={{ pageSize: 10, showSizeChanger: true }}
+                  scroll={{ x: 760 }}
+                  onRow={(record) => ({
+                    onClick: () => {
+                      if (messages.length && record.uid) {
+                        loadMessage(record.uid);
+                      }
+                    },
+                    className: messages.length ? 'clickable-row' : '',
+                  })}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无结果" />
+              )}
+            </Card>
+          </Col>
+
+          <Col xs={24}>
+            <Card title="邮件内容" loading={messageLoading}>
+              {selectedMessage ? (
+                <Space direction="vertical" size={16} className="full-width">
+                  <Descriptions
+                    size="small"
+                    column={{ xs: 1, md: 2 }}
+                    items={[
+                      { key: 'from', label: '发件人', children: selectedMessage.from || '-' },
+                      { key: 'to', label: '收件人', children: selectedMessage.to || '-' },
+                      { key: 'subject', label: '主题', children: selectedMessage.subject || '(无主题)' },
+                      { key: 'date', label: '时间', children: formatDate(selectedMessage.date) || '-' },
+                    ]}
+                  />
+                  {selectedMessage.attachments?.length ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={`附件：${selectedMessage.attachments
+                        .map((item) => `${item.filename} (${formatSize(item.size)})`)
+                        .join('，')}`}
+                    />
+                  ) : null}
+                  {selectedMessage.html ? (
+                    <iframe className="message-frame" sandbox="" srcDoc={selectedMessage.html} title="邮件正文" />
+                  ) : (
+                    <pre className="message-text">{selectedMessage.text || '(无正文)'}</pre>
+                  )}
+                </Space>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一封邮件查看正文" />
+              )}
+            </Card>
+          </Col>
+        </Row>
+      </Layout.Content>
+    </Layout>
+  );
+}
+
+function formatDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}

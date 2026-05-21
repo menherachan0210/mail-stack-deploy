@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ stack_root }}"
+docker compose ps
+
+curl -fsS "http://127.0.0.1:8088/admin/" >/dev/null
+{% if enable_roundcube | bool %}
+curl -fsS "http://127.0.0.1:8089/" >/dev/null
+{% endif %}
+{% if enable_mail_tools | bool %}
+curl -fsS "http://127.0.0.1:{{ tools_port }}{{ tools_base_path }}/api/session" >/dev/null
+{% endif %}
+
+echo "HEALTHCHECK_OK=1"

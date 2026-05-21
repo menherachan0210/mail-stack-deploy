@@ -1,0 +1,69 @@
+services:
+  stalwart:
+    image: {{ stalwart_image }}
+    container_name: stalwart
+    restart: unless-stopped
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "143:143"
+      - "993:993"
+      - "110:110"
+      - "995:995"
+      - "4190:4190"
+      - "127.0.0.1:8088:8080"
+      - "127.0.0.1:8443:443"
+    volumes:
+      - {{ stalwart_data_dir }}:/var/lib/stalwart
+      - {{ stalwart_config_dir }}:/etc/stalwart
+    env_file:
+      - ./.env
+    environment:
+      - STALWART_PUBLIC_URL=https://{{ mail_host }}
+    networks:
+      - mail_stack
+
+{% if enable_roundcube | bool %}
+  roundcube:
+    image: {{ roundcube_image }}
+    container_name: roundcube
+    restart: unless-stopped
+    depends_on:
+      - stalwart
+    ports:
+      - "127.0.0.1:8089:80"
+    environment:
+      - ROUNDCUBEMAIL_DEFAULT_HOST=ssl://{{ mail_host }}
+      - ROUNDCUBEMAIL_DEFAULT_PORT=993
+      - ROUNDCUBEMAIL_SMTP_SERVER=ssl://{{ mail_host }}
+      - ROUNDCUBEMAIL_SMTP_PORT=465
+      - ROUNDCUBEMAIL_SMTP_USER=%u
+      - ROUNDCUBEMAIL_SMTP_PASS=%p
+      - ROUNDCUBEMAIL_SKIN=elastic
+      - ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE=25M
+      - ROUNDCUBEMAIL_LANGUAGE=zh_CN
+    volumes:
+      - {{ roundcube_db_dir }}:/var/roundcube/db
+    networks:
+      - mail_stack
+{% endif %}
+
+{% if enable_mail_tools | bool %}
+  mail-tools:
+    build: ./mail-tools
+    container_name: mail-tools
+    restart: unless-stopped
+    depends_on:
+      - stalwart
+    env_file:
+      - ./.env
+    ports:
+      - "127.0.0.1:{{ tools_port }}:8091"
+    networks:
+      - mail_stack
+{% endif %}
+
+networks:
+  mail_stack:
+    name: mail_stack

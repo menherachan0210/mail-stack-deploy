@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STACK_ROOT="{{ stack_root }}"
+ENV_FILE="$STACK_ROOT/.env"
+CREDENTIALS_FILE="$STACK_ROOT/credentials.txt"
+DNS_FILE="$STACK_ROOT/dns-records.txt"
+
+source "$ENV_FILE"
+
+if [ -s "{{ stalwart_config_dir }}/config.json" ]; then
+  echo "BOOTSTRAP_CREATED=0"
+  exit 0
+fi
+
+for _ in $(seq 1 60); do
+  if curl -fsS "http://127.0.0.1:8088/jmap/session" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+AUTH="$(printf '%s:%s' '{{ bootstrap_recovery_user }}' '{{ bootstrap_recovery_password_final }}' | base64 -w0)"
+BOOTSTRAP_JSON="$(mktemp)"
+cat > "$BOOTSTRAP_JSON" <<'JSON'
+{
+  "using": ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"],
+  "methodCalls": [[
+    "x:Bootstrap/set",
+    {
+      "update": {
+        "singleton": {
+          "serverHostname": "{{ mail_host }}",
+          "defaultDomain": "{{ domain }}",
+          "requestTlsCertificate": false,
+          "generateDkimKeys": true,
+          "dataStore": {
+            "@type": "RocksDb",
+            "path": "/var/lib/stalwart/",
+            "blobSize": 16834,
+            "bufferSize": 134217728,
+            "poolWorkers": null
+          },
+          "blobStore": { "@type": "Default" },
+          "searchStore": { "@type": "Default" },
+          "inMemoryStore": { "@type": "Default" },
+          "directory": { "@type": "Internal" },
+          "tracer": {
+            "@type": "Log",
+            "path": "/var/log/stalwart/",
+            "prefix": "stalwart",
+            "rotate": "daily",
+            "ansi": false,
+            "multiline": false,
+            "enable": true,
+            "level": "info",
+            "lossy": false,
+            "events": {},
+            "eventsPolicy": "exclude"
+          },
+          "dnsServer": { "@type": "Manual" }
+        }
+      }
+    },
+    "s"
+  ]]
+}
+JSON
+
+RESPONSE="$(curl -fsS \
+  -H "Authorization: Basic $AUTH" \
+  -H "Content-Type: application/json" \
+  --data @"$BOOTSTRAP_JSON" \
+  "http://127.0.0.1:8088/jmap")"
+rm -f "$BOOTSTRAP_JSON"
+
+if echo "$RESPONSE" | grep -q '"notUpdated"'; then
+  echo "$RESPONSE" >&2
+  exit 1
+fi
+
+BOOT_USER="$(echo "$RESPONSE" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["methodResponses"][0][1]["updated"]["singleton"]["username"])')"
+BOOT_SECRET="$(echo "$RESPONSE" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["methodResponses"][0][1]["updated"]["singleton"]["secret"])')"
+
+python3 - "$ENV_FILE" "$BOOT_USER" "$BOOT_SECRET" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+user = sys.argv[2]
+secret = sys.argv[3]
+lines = env_path.read_text().splitlines()
+updates = {
+    "STALWART_ADMIN_USER": user,
+    "STALWART_ADMIN_PASSWORD": secret,
+}
+seen = set()
+out = []
+for line in lines:
+    if "=" in line:
+        key = line.split("=", 1)[0]
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+    out.append(line)
+for key, value in updates.items():
+    if key not in seen:
+        out.append(f"{key}={value}")
+env_path.write_text("\n".join(out) + "\n")
+PY
+
+cat > "$CREDENTIALS_FILE" <<EOF
+Stalwart admin URL: https://{{ mail_host }}/admin/
+Stalwart admin username: $BOOT_USER
+Stalwart admin password: $BOOT_SECRET
+
+Roundcube URL: https://{{ webmail_host }}/
+
+Mail tools URL: https://{{ mail_host }}{{ tools_base_path }}/
+Mail tools username: {{ tools_admin_user }}
+Mail tools password: {{ tools_admin_password_final }}
+
+Default mailbox password: {{ tools_default_mail_password }}
+EOF
+chmod 600 "$CREDENTIALS_FILE"
+
+echo "BOOTSTRAP_CREATED=1"

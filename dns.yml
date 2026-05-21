@@ -1,0 +1,14 @@
+---
+- name: Print mail stack DNS records
+  hosts: mail_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Print DNS records
+      ansible.builtin.command: "{{ stack_root | default('/opt/mail-stack') }}/scripts/print-dns-records.sh"
+      register: dns_records
+      changed_when: false
+
+    - name: Show DNS records
+      ansible.builtin.debug:
+        msg: "{{ dns_records.stdout_lines }}"

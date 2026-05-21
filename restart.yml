@@ -1,0 +1,16 @@
+---
+- name: Restart mail stack
+  hosts: mail_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Restart containers
+      ansible.builtin.command: docker compose restart
+      args:
+        chdir: "{{ stack_root | default('/opt/mail-stack') }}"
+      changed_when: true
+
+    - name: Reload Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded

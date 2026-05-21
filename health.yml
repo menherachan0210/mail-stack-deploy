@@ -1,0 +1,9 @@
+---
+- name: Run mail stack health checks
+  hosts: mail_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run healthcheck script
+      ansible.builtin.command: "{{ stack_root | default('/opt/mail-stack') }}/scripts/healthcheck.sh"
+      changed_when: false

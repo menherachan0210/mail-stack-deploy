@@ -1,0 +1,63 @@
+# Required
+domain: edu.example.com
+mail_host: mail.edu.example.com
+webmail_host: webmail.edu.example.com
+admin_email: admin@example.com
+
+# Optional
+stack_root: /opt/mail-stack
+stalwart_data_dir: /srv/stalwart/data
+stalwart_config_dir: /srv/stalwart/etc
+roundcube_db_dir: /srv/roundcube/db
+roundcube_config_dir: /srv/roundcube/config
+
+stalwart_image: stalwartlabs/stalwart:v0.16
+roundcube_image: roundcube/roundcubemail:latest
+
+tools_admin_user: admin
+tools_default_mail_password: "132456798oxy"
+tools_base_path: /tools
+tools_port: 8091
+
+bootstrap_recovery_user: bootstrap-admin
+bootstrap_recovery_password: ""
+stalwart_admin_password: ""
+tools_admin_password: ""
+mail_tools_session_secret: ""
+
+request_letsencrypt: true
+force_renew_certificates: false
+skip_dns_check: false
+skip_port_check: false
+
+enable_roundcube: true
+enable_mail_tools: true
+enable_stalwart_admin_proxy: true
+
+# When true, Nginx also serves Stalwart admin at https://mail_host/admin/.
+# Stalwart bootstrap/admin can still be reached locally through Docker.
+nginx_client_max_body_size: 100m
+
+required_ports:
+  - 25
+  - 80
+  - 443
+  - 465
+  - 587
+  - 993
+
+port_check_ports:
+  - 25
+  - 465
+  - 587
+  - 143
+  - 993
+  - 110
+  - 995
+  - 4190
+
+deploy_create_test_accounts: false
+deploy_test_prefix: menherachan
+deploy_test_start: 1
+deploy_test_end: 100
+deploy_test_width: 3

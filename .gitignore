@@ -1,0 +1,6 @@
+.secrets/
+files/mail-tools/node_modules/
+files/mail-tools/dist/
+*.retry
+*.log
+.DS_Store

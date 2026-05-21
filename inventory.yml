@@ -1,0 +1,5 @@
+mail_servers:
+  hosts:
+    mail01:
+      ansible_host: 1.2.3.4
+      ansible_user: root

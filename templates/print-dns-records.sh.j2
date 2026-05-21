@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CHECK_ONLY=0
+if [ "${1:-}" = "--check-only" ]; then
+  CHECK_ONLY=1
+fi
+
+DOMAIN="{{ domain }}"
+MAIL_HOST="{{ mail_host }}"
+WEBMAIL_HOST="{{ webmail_host }}"
+SERVER_IP="$(curl -fsS4 https://api.ipify.org || hostname -I | awk '{print $1}')"
+OUT="{{ stack_root }}/dns-records.txt"
+
+mail_a="$(dig +short A "$MAIL_HOST" | tail -n 1 || true)"
+webmail_a="$(dig +short A "$WEBMAIL_HOST" | tail -n 1 || true)"
+mx="$(dig +short MX "$DOMAIN" | sort -n | head -n 1 || true)"
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  ok=1
+  [ "$mail_a" = "$SERVER_IP" ] || { echo "A record mismatch: $MAIL_HOST -> $mail_a, expected $SERVER_IP"; ok=0; }
+  [ "$webmail_a" = "$SERVER_IP" ] || { echo "A record mismatch: $WEBMAIL_HOST -> $webmail_a, expected $SERVER_IP"; ok=0; }
+  echo "$mx" | grep -Eq "[[:space:]]$MAIL_HOST\\.?$" || { echo "MX record mismatch: $DOMAIN MX is '$mx', expected '10 $MAIL_HOST'"; ok=0; }
+  [ "$ok" -eq 1 ] || exit 1
+  echo "DNS_CHECK_OK=1"
+  exit 0
+fi
+
+{
+  echo "Required DNS records"
+  echo
+  echo "A     {{ mail_host }}       $SERVER_IP     DNS only / grey cloud"
+  echo "A     {{ webmail_host }}    $SERVER_IP     DNS only / grey cloud"
+  echo "MX    {{ domain }}          10 {{ mail_host }}"
+  echo "TXT   {{ domain }}          v=spf1 mx -all"
+  echo "TXT   _dmarc.{{ domain }}   v=DMARC1; p=reject; rua=mailto:postmaster@{{ domain }}"
+  echo
+  echo "DKIM records"
+} > "$OUT"
+
+if docker ps --format '{{ "{{.Names}}" }}' | grep -qx stalwart; then
+  source "{{ stack_root }}/.env"
+  AUTH="$(printf '%s:%s' "$STALWART_ADMIN_USER" "$STALWART_ADMIN_PASSWORD" | base64 -w0)"
+  docker exec mail-tools node -e "
+process.env.NODE_TLS_REJECT_UNAUTHORIZED='0';
+const auth='Basic $AUTH';
+fetch('https://stalwart:443/jmap',{
+  method:'POST',
+  headers:{authorization:auth,'content-type':'application/json'},
+  body:JSON.stringify({
+    using:['urn:ietf:params:jmap:core','urn:stalwart:jmap'],
+    methodCalls:[
+      ['x:DkimSignature/query',{},'q'],
+      ['x:DkimSignature/get',{'#ids':{resultOf:'q',name:'x:DkimSignature/query',path:'/ids'}},'g']
+    ]
+  })
+}).then(r=>r.json()).then(data=>{
+  const get=data.methodResponses.find(x=>x[0]==='x:DkimSignature/get')?.[1];
+  for (const item of get?.list || []) {
+    const name=item.selector + '._domainkey.{{ domain }}';
+    const keyType=item['@type'] === 'Dkim1Ed25519Sha256' ? 'ed25519' : 'rsa';
+    const value='v=DKIM1; k=' + keyType + '; h=sha256; p=' + item.publicKey;
+    console.log('TXT   ' + name + '   ' + value);
+  }
+}).catch(err=>{ console.error(err.message); process.exit(0); });
+" >> "$OUT" || true
+else
+  echo "Run deploy first, then rerun this script to print DKIM records." >> "$OUT"
+fi
+
+cat "$OUT"

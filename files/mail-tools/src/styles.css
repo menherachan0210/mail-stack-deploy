@@ -1,0 +1,88 @@
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0b0d12;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.centered {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+}
+
+.app-header {
+  height: auto;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  background: #0f131a;
+  border-bottom: 1px solid #252d38;
+}
+
+.page-title {
+  margin: 0 0 4px !important;
+}
+
+.app-content {
+  width: min(1360px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 20px 0 36px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.message-frame {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid #303846;
+  border-radius: 8px;
+  background: white;
+}
+
+.message-text {
+  min-height: 260px;
+  max-height: 620px;
+  overflow: auto;
+  margin: 0;
+  padding: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid #303846;
+  border-radius: 8px;
+  background: #0d1117;
+  color: #e8edf3;
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-content {
+    width: min(100vw - 20px, 1360px);
+    padding-top: 12px;
+  }
+}

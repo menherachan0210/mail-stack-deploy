@@ -1,0 +1,30 @@
+---
+- name: Backup mail stack data
+  hosts: mail_servers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ stack_root | default('/opt/mail-stack') }}/backups"
+        state: directory
+        mode: "0700"
+
+    - name: Create backup archive
+      ansible.builtin.shell: |
+        set -e
+        tar -czf "{{ stack_root | default('/opt/mail-stack') }}/backups/mail-stack-{{ ansible_date_time.iso8601_basic_short }}.tgz" \
+          "{{ stalwart_data_dir | default('/srv/stalwart/data') }}" \
+          "{{ stalwart_config_dir | default('/srv/stalwart/etc') }}" \
+          "{{ roundcube_db_dir | default('/srv/roundcube/db') }}" \
+          "{{ roundcube_config_dir | default('/srv/roundcube/config') }}" \
+          "{{ stack_root | default('/opt/mail-stack') }}/.env" \
+          "{{ stack_root | default('/opt/mail-stack') }}/credentials.txt"
+        chmod 600 "{{ stack_root | default('/opt/mail-stack') }}/backups/mail-stack-{{ ansible_date_time.iso8601_basic_short }}.tgz"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Show backup path
+      ansible.builtin.debug:
+        msg: "Backup saved under {{ stack_root | default('/opt/mail-stack') }}/backups/"

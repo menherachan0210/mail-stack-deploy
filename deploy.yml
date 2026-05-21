@@ -1,0 +1,287 @@
+---
+- name: Deploy Stalwart, Roundcube, and mail tools
+  hosts: mail_servers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - domain is match('^[A-Za-z0-9.-]+$')
+          - mail_host is match('^[A-Za-z0-9.-]+$')
+          - webmail_host is match('^[A-Za-z0-9.-]+$')
+          - admin_email is match('^.+@.+$')
+        fail_msg: "Please set domain, mail_host, webmail_host, and admin_email in group_vars/all.yml."
+
+    - name: Create local secret directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/.secrets/{{ inventory_hostname }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Generate missing secrets locally
+      ansible.builtin.set_fact:
+        bootstrap_recovery_password_final: "{{ bootstrap_recovery_password | default('', true) | length > 0 | ternary(bootstrap_recovery_password, lookup('password', playbook_dir + '/.secrets/' + inventory_hostname + '/bootstrap_recovery chars=ascii_letters,digits length=24')) }}"
+        stalwart_admin_password_final: "{{ stalwart_admin_password | default('', true) | length > 0 | ternary(stalwart_admin_password, lookup('password', playbook_dir + '/.secrets/' + inventory_hostname + '/stalwart_admin chars=ascii_letters,digits length=24')) }}"
+        tools_admin_password_final: "{{ tools_admin_password | default('', true) | length > 0 | ternary(tools_admin_password, lookup('password', playbook_dir + '/.secrets/' + inventory_hostname + '/tools_admin chars=ascii_letters,digits length=24')) }}"
+        mail_tools_session_secret_final: "{{ mail_tools_session_secret | default('', true) | length > 0 | ternary(mail_tools_session_secret, lookup('password', playbook_dir + '/.secrets/' + inventory_hostname + '/mail_tools_session chars=ascii_letters,digits length=48')) }}"
+
+    - name: Show deployment target
+      ansible.builtin.debug:
+        msg:
+          - "Domain: {{ domain }}"
+          - "Mail host: {{ mail_host }}"
+          - "Webmail: {{ webmail_host }}"
+          - "Stack root: {{ stack_root }}"
+
+  tasks:
+    - name: Install packages on RHEL compatible systems
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - ca-certificates
+          - tar
+          - gzip
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - python3-pip
+          - python3-cryptography
+          - bind-utils
+          - firewalld
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install packages on Debian compatible systems
+      ansible.builtin.apt:
+        name:
+          - curl
+          - ca-certificates
+          - tar
+          - gzip
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - python3-pip
+          - python3-cryptography
+          - dnsutils
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Install Docker on RHEL compatible systems
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - docker-compose-plugin
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Docker on Debian compatible systems
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Check mail protocol port availability before starting services
+      ansible.builtin.shell: |
+        set -e
+        for port in {{ port_check_ports | join(' ') }}; do
+          if ss -ltn "( sport = :$port )" | awk 'NR>1 {print}' | grep -q .; then
+            echo "Port $port is already listening. Stop the existing service or set skip_port_check=true."
+            ss -ltnp "( sport = :$port )" || true
+            exit 1
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: not (skip_port_check | bool)
+
+    - name: Enable Docker and Nginx
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - docker
+        - nginx
+
+    - name: Open firewall ports when firewalld exists
+      ansible.builtin.command: "firewall-cmd --permanent --add-port={{ item }}/tcp"
+      loop: "{{ required_ports }}"
+      register: firewalld_open
+      changed_when: "'success' in firewalld_open.stdout"
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Reload firewalld when available
+      ansible.builtin.command: firewall-cmd --reload
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Create stack directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode | default('0755') }}"
+      loop:
+        - { path: "{{ stack_root }}" }
+        - { path: "{{ stack_root }}/mail-tools" }
+        - { path: "{{ stack_root }}/scripts" }
+        - { path: "{{ stalwart_data_dir }}", mode: "0775" }
+        - { path: "{{ stalwart_config_dir }}", mode: "0775" }
+        - { path: "{{ roundcube_db_dir }}" }
+        - { path: "{{ roundcube_config_dir }}" }
+
+    - name: Check existing stack environment
+      ansible.builtin.stat:
+        path: "{{ stack_root }}/.env"
+      register: existing_stack_env_stat
+
+    - name: Read existing stack environment
+      ansible.builtin.slurp:
+        path: "{{ stack_root }}/.env"
+      register: existing_stack_env
+      when: existing_stack_env_stat.stat.exists
+
+    - name: Preserve existing Stalwart admin credentials on redeploy
+      ansible.builtin.set_fact:
+        existing_stack_env_text: "{{ (existing_stack_env.content | b64decode) if existing_stack_env_stat.stat.exists else '' }}"
+        stalwart_admin_user_effective: "{{ ((existing_stack_env.content | b64decode) | regex_search('(?m)^STALWART_ADMIN_USER=(.*)$', '\\1') | first) if (existing_stack_env_stat.stat.exists and ((existing_stack_env.content | b64decode) is search('(?m)^STALWART_ADMIN_USER='))) else 'admin@' ~ domain }}"
+        stalwart_admin_password_effective: "{{ ((existing_stack_env.content | b64decode) | regex_search('(?m)^STALWART_ADMIN_PASSWORD=(.*)$', '\\1') | first) if (existing_stack_env_stat.stat.exists and ((existing_stack_env.content | b64decode) is search('(?m)^STALWART_ADMIN_PASSWORD='))) else stalwart_admin_password_final }}"
+
+    - name: Render stack environment
+      ansible.builtin.template:
+        src: stack.env.j2
+        dest: "{{ stack_root }}/.env"
+        mode: "0600"
+
+    - name: Upload Docker Compose
+      ansible.builtin.template:
+        src: compose.yml.j2
+        dest: "{{ stack_root }}/compose.yml"
+        mode: "0644"
+
+    - name: Upload mail tools source
+      ansible.builtin.copy:
+        src: files/mail-tools/
+        dest: "{{ stack_root }}/mail-tools/"
+        mode: preserve
+      when: enable_mail_tools | bool
+
+    - name: Upload helper scripts
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ stack_root }}/scripts/{{ item.dest }}"
+        mode: "0755"
+      loop:
+        - { src: bootstrap-stalwart.sh.j2, dest: bootstrap-stalwart.sh }
+        - { src: print-dns-records.sh.j2, dest: print-dns-records.sh }
+        - { src: healthcheck.sh.j2, dest: healthcheck.sh }
+
+    - name: Print suggested DNS records before DNS check
+      ansible.builtin.command: "{{ stack_root }}/scripts/print-dns-records.sh"
+      register: suggested_dns_records
+      changed_when: false
+
+    - name: Show suggested DNS records
+      ansible.builtin.debug:
+        msg: "{{ suggested_dns_records.stdout_lines }}"
+
+    - name: Check DNS before requesting certificates
+      ansible.builtin.command: "{{ stack_root }}/scripts/print-dns-records.sh --check-only"
+      register: dns_check
+      changed_when: false
+      failed_when: dns_check.rc != 0
+      when:
+        - request_letsencrypt | bool
+        - not (skip_dns_check | bool)
+
+    - name: Start Stalwart for bootstrap
+      ansible.builtin.command: docker compose up -d stalwart
+      args:
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Bootstrap Stalwart when config is missing
+      ansible.builtin.command: "{{ stack_root }}/scripts/bootstrap-stalwart.sh"
+      args:
+        chdir: "{{ stack_root }}"
+      register: bootstrap_result
+      changed_when: "'BOOTSTRAP_CREATED=1' in bootstrap_result.stdout"
+
+    - name: Restart Stalwart after bootstrap
+      ansible.builtin.command: docker compose restart stalwart
+      args:
+        chdir: "{{ stack_root }}"
+      changed_when: true
+      when: "'BOOTSTRAP_CREATED=1' in bootstrap_result.stdout"
+
+    - name: Start all containers
+      ansible.builtin.command: docker compose up -d --build
+      args:
+        chdir: "{{ stack_root }}"
+      changed_when: true
+
+    - name: Render Nginx mail host config
+      ansible.builtin.template:
+        src: nginx-mail.conf.j2
+        dest: "/etc/nginx/conf.d/{{ mail_host }}.conf"
+        mode: "0644"
+
+    - name: Render Nginx webmail config
+      ansible.builtin.template:
+        src: nginx-webmail.conf.j2
+        dest: "/etc/nginx/conf.d/{{ webmail_host }}.conf"
+        mode: "0644"
+      when: enable_roundcube | bool
+
+    - name: Validate Nginx config
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Reload Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Request Let's Encrypt certificates
+      ansible.builtin.command: >
+        certbot --nginx
+        -d {{ mail_host }}
+        -d {{ webmail_host }}
+        --non-interactive
+        --agree-tos
+        -m {{ admin_email }}
+        --redirect
+        {{ force_renew_certificates | bool | ternary('--force-renewal', '') }}
+      register: certbot_result
+      changed_when: "'Congratulations' in certbot_result.stdout or 'Successfully' in certbot_result.stdout"
+      when: request_letsencrypt | bool
+
+    - name: Run health checks
+      ansible.builtin.command: "{{ stack_root }}/scripts/healthcheck.sh"
+      register: healthcheck_result
+      changed_when: false
+
+    - name: Print DNS records
+      ansible.builtin.command: "{{ stack_root }}/scripts/print-dns-records.sh"
+      register: dns_records_result
+      changed_when: false
+
+    - name: Deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Stalwart admin: https://{{ mail_host }}/admin/"
+          - "Roundcube: https://{{ webmail_host }}/"
+          - "Mail tools: https://{{ mail_host }}{{ tools_base_path }}/"
+          - "Credentials file on server: {{ stack_root }}/credentials.txt"
+          - "DNS record file on server: {{ stack_root }}/dns-records.txt"
