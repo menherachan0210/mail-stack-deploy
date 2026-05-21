@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   Layout,
+  Menu,
   Modal,
   Row,
   Space,
@@ -32,6 +33,7 @@ export function MailToolsApp({ icons }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [mailLoading, setMailLoading] = useState(false);
   const [messageLoading, setMessageLoading] = useState(false);
+  const [activeSection, setActiveSection] = useState('bulk');
   const [resultText, setResultText] = useState('等待操作。');
   const [createRows, setCreateRows] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -79,7 +81,15 @@ export function MailToolsApp({ icons }) {
     setCreateRows([]);
     setMessages([]);
     setSelectedMessage(null);
+    setActiveSection('bulk');
     setResultText('等待操作。');
+  }
+
+  function focusSection(key) {
+    setActiveSection(key);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`section-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   async function previewAccounts() {
@@ -113,6 +123,7 @@ export function MailToolsApp({ icons }) {
         setCreateRows(data.accounts.map(toCreateRow));
         setMessages([]);
         setSelectedMessage(null);
+        focusSection('results');
         setResultText(
           `预览 ${data.summary.total} 个账号：可创建 ${data.summary.pending} 个，已存在 ${data.summary.existing} 个。`,
         );
@@ -144,6 +155,7 @@ export function MailToolsApp({ icons }) {
       setCreateRows(rows);
       setMessages([]);
       setSelectedMessage(null);
+      focusSection('results');
       setResultText(
         `创建完成：成功 ${created.length} 个，跳过 ${skipped.length} 个，失败 ${notCreated.length} 个。`,
       );
@@ -168,6 +180,7 @@ export function MailToolsApp({ icons }) {
       setMailboxAuth({ address, password: values.password });
       setMessages(data.messages.map((item) => ({ ...item, key: item.uid })));
       setCreateRows([]);
+      focusSection('results');
       setResultText(`${data.address} 收件箱：${data.messages.length} 封邮件。`);
       if (!data.messages.length) {
         message.info('收件箱暂无邮件');
@@ -189,6 +202,7 @@ export function MailToolsApp({ icons }) {
         `/api/mailboxes/${encodeURIComponent(mailboxAuth.address)}/messages/${uid}?${params}`,
       );
       setSelectedMessage(data.message);
+      focusSection('message');
       setResultText(`已打开邮件 #${uid}。`);
     } catch (err) {
       message.error(err.message);
@@ -241,6 +255,12 @@ export function MailToolsApp({ icons }) {
   }, [messages.length]);
 
   const resultData = messages.length ? messages : createRows;
+  const sidebarItems = [
+    { key: 'bulk', icon: <Icon.UserAddOutlined />, label: '批量创建' },
+    { key: 'inbox', icon: <Icon.InboxOutlined />, label: '查看收件箱' },
+    { key: 'results', icon: <Icon.SearchOutlined />, label: '结果' },
+    { key: 'message', icon: <Icon.MailOutlined />, label: '邮件内容' },
+  ];
 
   if (sessionLoading) {
     return (
@@ -277,24 +297,54 @@ export function MailToolsApp({ icons }) {
 
   return (
     <Layout className="app-shell">
-      <Layout.Header className="app-header">
-        <div>
-          <Typography.Title level={3} className="page-title">
+      <Layout.Sider
+        width={248}
+        breakpoint="lg"
+        collapsedWidth="0"
+        className="app-sider"
+      >
+        <div className="sider-brand">
+          <Typography.Title level={4} className="sider-title">
             邮箱工具
           </Typography.Title>
-          <Typography.Text type="secondary">
-            已登录：{session.user || 'admin'}，域名：{domain}
+          <Typography.Text type="secondary" className="sider-domain">
+            {domain}
           </Typography.Text>
         </div>
-        <Button icon={<Icon.LogoutOutlined />} onClick={handleLogout}>
-          退出
-        </Button>
-      </Layout.Header>
+        <Menu
+          className="sider-menu"
+          mode="inline"
+          selectedKeys={[activeSection]}
+          items={sidebarItems}
+          onClick={({ key }) => focusSection(key)}
+        />
+        <div className="sider-footer">
+          <Typography.Text type="secondary">已登录</Typography.Text>
+          <Typography.Text className="sider-user">{session.user || 'admin'}</Typography.Text>
+        </div>
+      </Layout.Sider>
 
-      <Layout.Content className="app-content">
-        <Row gutter={[16, 16]}>
-          <Col xs={24} xl={12}>
+      <Layout className="main-layout">
+        <Layout.Header className="app-header">
+          <div>
+            <Typography.Title level={3} className="page-title">
+              邮箱工具
+            </Typography.Title>
+            <Typography.Text type="secondary">
+              已登录：{session.user || 'admin'}，域名：{domain}
+            </Typography.Text>
+          </div>
+          <Button icon={<Icon.LogoutOutlined />} onClick={handleLogout}>
+            退出
+          </Button>
+        </Layout.Header>
+
+        <Layout.Content className="app-content">
+          <Row gutter={[16, 16]}>
+            <Col xs={24} xl={12}>
             <Card
+              id="section-bulk"
+              className="section-card"
               title={
                 <Space>
                   <Icon.UserAddOutlined />
@@ -381,10 +431,12 @@ export function MailToolsApp({ icons }) {
                 </Space>
               </Form>
             </Card>
-          </Col>
+            </Col>
 
-          <Col xs={24} xl={12}>
+            <Col xs={24} xl={12}>
             <Card
+              id="section-inbox"
+              className="section-card"
               title={
                 <Space>
                   <Icon.InboxOutlined />
@@ -444,10 +496,12 @@ export function MailToolsApp({ icons }) {
                 </Row>
               </Form>
             </Card>
-          </Col>
+            </Col>
 
-          <Col xs={24}>
+            <Col xs={24}>
             <Card
+              id="section-results"
+              className="section-card"
               title="结果"
               extra={<Typography.Text type="secondary">{resultText}</Typography.Text>}
             >
@@ -471,10 +525,10 @@ export function MailToolsApp({ icons }) {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无结果" />
               )}
             </Card>
-          </Col>
+            </Col>
 
-          <Col xs={24}>
-            <Card title="邮件内容" loading={messageLoading}>
+            <Col xs={24}>
+            <Card id="section-message" className="section-card" title="邮件内容" loading={messageLoading}>
               {selectedMessage ? (
                 <Space direction="vertical" size={16} className="full-width">
                   <Descriptions
@@ -506,9 +560,10 @@ export function MailToolsApp({ icons }) {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一封邮件查看正文" />
               )}
             </Card>
-          </Col>
-        </Row>
-      </Layout.Content>
+            </Col>
+          </Row>
+        </Layout.Content>
+      </Layout>
     </Layout>
   );
 }

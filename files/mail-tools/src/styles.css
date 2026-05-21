@@ -13,6 +13,55 @@ body {
   min-height: 100vh;
 }
 
+.app-sider {
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  background: #0f131a !important;
+  border-right: 1px solid #252d38;
+}
+
+.sider-brand {
+  padding: 22px 18px 16px;
+}
+
+.sider-title {
+  margin: 0 0 6px !important;
+}
+
+.sider-domain {
+  display: block;
+  word-break: break-all;
+}
+
+.sider-menu {
+  background: transparent;
+  border-inline-end: 0 !important;
+  padding: 4px 10px;
+}
+
+.sider-footer {
+  position: absolute;
+  right: 16px;
+  bottom: 18px;
+  left: 16px;
+  display: grid;
+  gap: 4px;
+  padding-top: 14px;
+  border-top: 1px solid #252d38;
+}
+
+.sider-user {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-layout {
+  min-width: 0;
+  background: #0b0d12;
+}
+
 .centered {
   align-items: center;
   justify-content: center;
@@ -30,7 +79,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 24px;
+  padding: 16px 28px;
   background: #0f131a;
   border-bottom: 1px solid #252d38;
 }
@@ -40,9 +89,13 @@ body {
 }
 
 .app-content {
-  width: min(1360px, calc(100vw - 32px));
+  width: min(1360px, calc(100vw - 280px));
   margin: 0 auto;
-  padding: 20px 0 36px;
+  padding: 22px 0 40px;
+}
+
+.section-card {
+  scroll-margin-top: 24px;
 }
 
 .full-width {
@@ -75,10 +128,22 @@ body {
   color: #e8edf3;
 }
 
+@media (max-width: 991px) {
+  .app-sider {
+    position: fixed !important;
+    z-index: 20;
+  }
+
+  .app-content {
+    width: min(100vw - 24px, 1360px);
+  }
+}
+
 @media (max-width: 640px) {
   .app-header {
     align-items: flex-start;
     flex-direction: column;
+    padding: 16px;
   }
 
   .app-content {
