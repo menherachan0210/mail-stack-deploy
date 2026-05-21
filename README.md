@@ -2,6 +2,8 @@
 
 Ansible playbooks for deploying a self-hosted mail stack on a remote Linux server.
 
+English | [简体中文](README.zh-CN.md)
+
 The stack includes:
 
 - [Stalwart Mail Server](https://stalw.art/) for SMTP, IMAP, POP3, JMAP, DKIM, and domain management
@@ -38,6 +40,32 @@ Default public endpoints:
 Stalwart Admin: https://mail.example.com/admin/
 Mail Tools:     https://mail.example.com/tools/
 Roundcube:      https://webmail.example.com/
+```
+
+## Before You Start
+
+Prepare the following before running the playbook:
+
+1. A Linux server with root SSH access.
+2. A public IPv4 address.
+3. A domain or subdomain that you can manage in DNS.
+4. DNS records for `mail_host`, `webmail_host`, MX, SPF, and DMARC.
+5. Inbound firewall or cloud security group rules for the required mail and web ports.
+6. No existing mail server using the standard SMTP, IMAP, POP3, or ManageSieve ports.
+7. A control host with `ansible` and `ssh` installed.
+
+The domain does not have to be a subdomain. Both of these are valid:
+
+```text
+domain: example.com
+mail_host: mail.example.com
+webmail_host: webmail.example.com
+```
+
+```text
+domain: edu.example.com
+mail_host: mail.edu.example.com
+webmail_host: webmail.edu.example.com
 ```
 
 ## Server Requirements
